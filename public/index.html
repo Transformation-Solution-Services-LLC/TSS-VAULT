@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f1eee5">
+  <title>Vault</title>
+  <link rel="icon" href="/brand/vault.png" type="image/png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login" class="login" hidden>
+    <div class="card login-card">
+      <h1 class="brandbar brandbar-login"><picture><source srcset="/brand/tss-wordmark-light.webp" media="(prefers-color-scheme: dark)"><img class="brandbar-tss" src="/brand/tss-wordmark.webp" alt="TSS"></picture><img class="brandbar-icon" src="/brand/vault.png" alt=""><span class="brandbar-name">Vault</span><img class="brandbar-wally" src="/brand/wally.webp" alt="Wally, the TSS robot"></h1>
+      <p class="muted">The team's workspace: the message board, case notes and the client directory.</p>
+      <p id="login-message">You sign in to Vault through Cockpit. Open Vault from Cockpit's app launcher.</p>
+      <button id="cockpit-link" type="button" class="primary" hidden>Go to Cockpit</button>
+      <button id="dev-signin" type="button" hidden>Developer sign-in</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </div>
+  </div>
+
+  <div id="app" class="shell" hidden>
+    <aside class="side">
+      <a class="brandbar" href="#/"><picture><source srcset="/brand/tss-wordmark-light.webp" media="(prefers-color-scheme: dark)"><img class="brandbar-tss" src="/brand/tss-wordmark.webp" alt="TSS"></picture><img class="brandbar-icon" src="/brand/vault.png" alt=""><span class="brandbar-name">Vault</span><img class="brandbar-wally" src="/brand/wally.webp" alt="Wally, the TSS robot"></a>
+      <nav class="nav" aria-label="Vault">
+        <a href="#/" data-view="home">Home</a>
+        <a href="#/board" data-view="board">Message Board</a>
+        <a href="#/notes" data-view="notes">Case Notes</a>
+        <a href="#/directory" data-view="directory">Directory</a>
+        <a href="#/import" data-view="import" data-manage hidden>Import</a>
+        <a href="#/activity" data-view="activity" data-manage hidden>Activity</a>
+      </nav>
+      <div class="spacer"></div>
+      <div id="who" class="health"></div>
+      <div id="health" class="health muted"></div>
+    </aside>
+    <main class="main">
+      <section id="view"></section>
+    </main>
+  </div>
+
+  <div id="modal" class="modal" hidden role="dialog" aria-modal="true"><div class="card modal-card" id="modal-body"></div></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
