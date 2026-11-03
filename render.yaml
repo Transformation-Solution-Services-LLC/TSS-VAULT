@@ -1,0 +1,37 @@
+# One web service serving the API and the frontend, plus a Postgres database
+# for client profiles, case notes and the message board. In the TSS suite
+# this is deployed from TSS-FullStack's render.yaml instead, as tss-vault.
+databases:
+  - name: tss-vault-db
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: tss-vault
+    runtime: node
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tss-vault-db
+          property: connectionString
+      # People sign in through Cockpit. Its public address, e.g. https://cockpit.example.org
+      - key: COCKPIT_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      # Lets Cockpit read activity counts (never a name or a note).
+      - key: VAULT_SERVICE_TOKEN
+        generateValue: true
+      - key: TZ_DISPLAY
+        value: America/Los_Angeles
