@@ -202,6 +202,42 @@ test('home shows the three buttons\' counts and who is due for a check-in', asyn
   } finally { t.close(); }
 });
 
+test('Cockpit\'s Needs you list for one person: mentions, replies, their check-ins, never a client name', async () => {
+  const t = await setup();
+  try {
+    const svc = { Authorization: 'Bearer vault-svc', 'X-TSS-Org': 'org-a' };
+    const as = (id, name) => ({ ...svc, 'X-TSS-User': id, 'X-TSS-User-Name': encodeURIComponent(name) });
+    assert.equal((await t.call('GET', '/api/cockpit/needs-you', null, t.manager)).status, 401, 'a person\'s session is not the service token');
+    assert.equal((await t.call('GET', '/api/cockpit/needs-you', null, null, svc)).status, 400, 'the person is named');
+    assert.deepEqual((await t.call('GET', '/api/cockpit/needs-you', null, null, as('u-ray', 'Ray'))).body.items, []);
+
+    const ana = await t.ok('POST', '/api/clients', { first_name: 'Ana', last_name: 'Reyes', intake_on: '2026-08-01', assigned_to: 'ray' });
+    await t.ok('POST', '/api/clients', { first_name: 'Ben', last_name: 'Ito', intake_on: '2026-08-01', assigned_to: 'Kim' });
+    const root = await t.ok('POST', '/api/posts', { body: 'Who covers Friday intake?' }, t.reader);
+    const reply = await t.ok('POST', `/api/posts/${root.id}/replies`, { body: '@Ray I can, after 2pm' }, t.reader2);
+    await t.ok('POST', '/api/posts', { body: 'Email ray@example.org about the van' }, t.manager);
+    await t.ok('POST', '/api/posts', { body: '@Raymond is not Ray' }, t.manager);
+    await t.ok('POST', '/api/posts', { body: 'Note to self @Ray' }, t.reader);
+
+    const r = await t.call('GET', '/api/cockpit/needs-you', null, null, as('u-ray', 'Ray'));
+    assert.equal(r.status, 200);
+    const by = Object.fromEntries(r.body.items.map((i) => [i.id, i]));
+    assert.deepEqual(Object.keys(by).sort(), ['checkins', `mention-${reply.id}`, `replies-${root.id}`]);
+    assert.equal(by[`mention-${reply.id}`].title, 'Kim mentioned you on the Message Board');
+    assert.equal(by[`mention-${reply.id}`].to, `#/board?post=${root.id}`, 'opens the thread');
+    assert.equal(by[`replies-${root.id}`].count, 1);
+    assert.equal(by.checkins.count, 1, 'Ana is Ray\'s and has no note since August');
+    assert.equal(by.checkins.to, '#/directory?filter=checkin');
+    assert.ok(!r.text.includes('Ana') && !r.text.includes('Reyes') && !r.text.includes(ana.id), 'no client name or id');
+    assert.ok(!r.text.includes('Friday') && !r.text.includes('2pm'), 'no post text');
+
+    const kim = (await t.call('GET', '/api/cockpit/needs-you', null, null, as('u-kim', 'Kim'))).body.items;
+    assert.deepEqual(kim.map((i) => i.id), ['checkins'], 'Kim wrote the reply, so nothing on the board waits for her');
+    const other = await t.call('GET', '/api/cockpit/needs-you', null, null, { ...as('u-ray', 'Ray'), 'X-TSS-Org': 'org-b' });
+    assert.deepEqual(other.body.items, [], 'another organization sees nothing of org-a');
+  } finally { t.close(); }
+});
+
 test('Cockpit reads counts with the service token, never a name or a note', async () => {
   const t = await setup();
   try {
