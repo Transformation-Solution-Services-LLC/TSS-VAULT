@@ -5,6 +5,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 
 import { esc, day, when, KIND, STATUS, ago, age } from './util.js';
+import { mountImporter } from './importer.js';
 
 const state = { token: null, name: '', org: '', canManage: false, me: null, today: new Date().toISOString().slice(0, 10) };
 
@@ -58,7 +59,9 @@ async function download(path, name) {
 function takeTicket() {
   const m = /(?:^#|&)tss_launch=([^&]+)/.exec(location.hash);
   if (!m) return null;
-  history.replaceState(null, '', location.pathname + location.search);
+  // Cockpit may name a page to open on, e.g. #/import&tss_launch=...
+  const route = location.hash.slice(1).replace(/&?tss_launch=[^&]*/, '').replace(/^&/, '');
+  history.replaceState(null, '', location.pathname + location.search + (/^\/[\w/-]*$/.test(route) ? `#${route}` : ''));
   return decodeURIComponent(m[1]);
 }
 
@@ -373,19 +376,11 @@ async function showClient(id) {
 
 async function showImport() {
   $('#view').innerHTML = `<h2>Import clients</h2>
-    <p class="muted">Save the sheet as CSV. Column names are matched by name in any order; extra columns are ignored.</p>
-    <div class="card"><p>Columns: <code>first_name, last_name, preferred_name, pronouns, date_of_birth, email, phone, address, program, status, assigned_to, intake_on, emergency_contact, tags, summary</code>. Dates like 2026-03-31. A row whose email matches an existing client updates that client.</p>
-      <input type="file" id="clients-file" accept=".csv,text/csv"><p id="clients-status" class="status" aria-live="polite"></p></div>`;
-  $('#clients-file').addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const status = $('#clients-status');
-    status.textContent = `Importing ${file.name}…`;
-    try {
-      const r = await api('/api/import/clients', { method: 'POST', body: { csv: await file.text() } });
-      status.innerHTML = `${r.added} added, ${r.updated} updated.${r.skipped.length ? `<br><span class="error">${r.skipped.length} row${r.skipped.length === 1 ? '' : 's'} skipped:</span><br>${r.skipped.slice(0, 20).map((s) => `line ${s.line}: ${esc(s.reason)}`).join('<br>')}${r.skipped.length > 20 ? '<br>…' : ''}` : ''}`;
-    } catch (err) { status.textContent = err.message; }
-    e.target.value = '';
+    <p class="muted">Bring in the client list you keep today. Choose a CSV, match its columns, check the rows, then import. A client already in the directory is matched by email, or by name with the same date of birth or phone, and only filled in; importing the same sheet again adds nothing.</p>
+    <div class="card"><div id="import-clients"></div></div>`;
+  mountImporter($('#import-clients'), {
+    kind: 'clients', api,
+    summary: (r) => [`${r.added} new client${r.added === 1 ? '' : 's'}`, `${r.updated} updated`, r.unchanged ? `${r.unchanged} already there` : ''].filter(Boolean).join(', '),
   });
 }
 

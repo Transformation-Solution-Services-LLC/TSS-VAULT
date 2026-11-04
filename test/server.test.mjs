@@ -262,3 +262,39 @@ test('import and export of the directory are for managers, and an email match up
     assert.match(out.text, /Ana,Reyes/);
   } finally { t.close(); }
 });
+
+test('import: preview guesses columns, a dry run writes nothing, and the same sheet twice adds nothing', async () => {
+  const t = await setup();
+  try {
+    const sheet = [
+      'Client Name,DOB,Cell Phone,Case Manager,Intake Date,Client Status,Background',
+      '"Reyes, Ana",5/4/2010,541-555-0100,Dana,9/1/2026,Open,referred by school',
+      'Ben Ito,,,,,Waiting,',
+      'Ana Reyes,2010-05-04,,,,,',
+      'Ana Reyes,2011-01-01,,,,,another Ana Reyes',
+    ].join('\n');
+    assert.equal((await t.call('POST', '/api/import/clients/preview', { csv: sheet }, t.reader)).status, 403);
+    const p = await t.ok('POST', '/api/import/clients/preview', { csv: sheet }, t.manager, 200);
+    assert.equal(p.rows, 4);
+    assert.deepEqual(
+      [p.mapping.full_name, p.mapping.date_of_birth, p.mapping.phone, p.mapping.assigned_to, p.mapping.intake_on, p.mapping.status, p.mapping.summary],
+      [0, 1, 2, 3, 4, 5, 6],
+    );
+    const dry = await t.ok('POST', '/api/import/clients', { csv: sheet, mapping: p.mapping, dry_run: true }, t.manager, 200);
+    assert.deepEqual(dry.plan.map((x) => x.action), ['add', 'add', 'same', 'add'], 'same name and birth date is the same client; a different birth date is someone else');
+    assert.equal((await t.ok('GET', '/api/clients')).clients.length, 0, 'a dry run writes nothing');
+
+    const run = await t.ok('POST', '/api/import/clients', { csv: sheet, mapping: p.mapping }, t.manager, 200);
+    assert.deepEqual([run.added, run.updated, run.unchanged, run.skipped.length], [3, 0, 1, 0]);
+    const clients = (await t.ok('GET', '/api/clients')).clients;
+    const ana = clients.find((c) => c.date_of_birth === '2010-05-04');
+    assert.equal(ana.first_name, 'Ana');
+    assert.equal(ana.intake_on, '2026-09-01', 'US dates are read');
+    assert.equal(ana.status, 'active', '"Open" reads as active');
+    assert.equal(clients.find((c) => c.first_name === 'Ben').status, 'waitlist');
+
+    const again = await t.ok('POST', '/api/import/clients', { csv: sheet, mapping: p.mapping }, t.manager, 200);
+    assert.deepEqual([again.added, again.updated, again.unchanged], [0, 0, 4], 'the same sheet twice changes nothing');
+    assert.equal((await t.ok('GET', '/api/clients')).clients.length, 3);
+  } finally { t.close(); }
+});
