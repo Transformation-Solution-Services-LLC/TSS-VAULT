@@ -392,6 +392,14 @@ test('Circles looks a client up for intake with the service token: open clients,
     assert.equal(c.first_name, 'Ana'); assert.equal(c.last_name, 'Reyes'); assert.equal(c.date_of_birth, '2010-05-04'); assert.equal(c.phone, '541 555 0100');
     assert.doesNotMatch(r.text, /Private summary|Mom 555|Main St/, 'only the fields intake fills');
 
+    // A client whose summary or program mentions the name is not a match for it.
+    await t.ok('POST', '/api/clients', { first_name: 'Riley', last_name: 'Carter', summary: 'Harmed party in the Reyes case.', program: 'Youth' });
+    const byLast = await t.call('GET', '/api/service/clients?q=reyes', null, null, svc);
+    assert.deepEqual(byLast.body.clients.map((x) => x.first_name), ['Ana'], 'matched by name, not by summary');
+    const byFull = await t.call('GET', '/api/service/clients?q=Ana%20Reyes', null, null, svc);
+    assert.equal(byFull.body.clients.length, 1, 'first and last name together');
+    assert.equal((await t.call('GET', '/api/service/clients?q=youth', null, null, svc)).body.clients.length, 0, 'a program is not a name');
+
     const log = (await t.ok('GET', '/api/activity')).activity;
     const hit = log.find((e) => e.action === 'directory.lookup');
     assert.ok(hit, 'the lookup is logged');
