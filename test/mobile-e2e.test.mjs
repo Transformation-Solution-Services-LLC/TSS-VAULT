@@ -39,6 +39,15 @@ before(async () => {
 });
 after(async () => { await browser?.close(); server?.close(); });
 
+// Polls a check in the page. Not page.waitForFunction: older Playwright runs that through eval, which the app's Content-Security-Policy refuses.
+async function waitUntil(page, fn, _arg = null, { timeout = 15000 } = {}) {
+  const end = Date.now() + timeout;
+  for (;;) {
+    if (await page.evaluate(fn).catch(() => false)) return;
+    if (Date.now() > end) throw new Error(`waitUntil: timed out after ${timeout} ms: ${fn}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
 const shot = async (page, name) => { if (SHOTS) { fs.mkdirSync(SHOTS, { recursive: true }); await page.screenshot({ path: path.join(SHOTS, `vault-${name}.png`) }); } };
 const api = async (method, p, body, token) => {
   const r = await fetch(base + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: body ? JSON.stringify(body) : undefined });
@@ -74,7 +83,7 @@ test('a phone with no signal: case notes wait on the phone, survive a reload, an
   await page.fill('#f textarea[name="body"]', 'Met at the bus stop. Calm, ready for Thursday.');
   await shot(page, '3-note-offline');
   await page.click('#f button.primary, #f button[type="submit"]');
-  await page.waitForFunction(() => /saved on this phone/.test(document.querySelector('#toast')?.textContent || ''));
+  await waitUntil(page, () => /saved on this phone/.test(document.querySelector('#toast')?.textContent || ''));
   await page.waitForSelector('#pending');
   assert.equal(await page.textContent('.nav [data-pending]'), '1');
 
@@ -85,7 +94,7 @@ test('a phone with no signal: case notes wait on the phone, survive a reload, an
   await page.click('#client-hits button');
   await page.fill('#f textarea[name="body"]', 'Phone call. Has the job interview Monday.');
   await page.click('#f button.primary, #f button[type="submit"]');
-  await page.waitForFunction(() => document.querySelector('.nav [data-pending]')?.textContent === '2');
+  await waitUntil(page, () => document.querySelector('.nav [data-pending]')?.textContent === '2');
   await shot(page, '4-waiting-offline');
 
   // The app reloads with no signal: the cached shell opens it, and the notes are still listed.
@@ -100,7 +109,7 @@ test('a phone with no signal: case notes wait on the phone, survive a reload, an
   let slow = true; await context.route('**/api/**', (r) => (slow ? r.abort('internetdisconnected') : r.continue()));
   await context.setOffline(false);
   setTimeout(() => { slow = false; }, 1500);
-  await page.waitForFunction(() => !document.querySelector('#pending') && !document.querySelector('.no-signal') && document.querySelectorAll('#view .timeline li').length === 2, null, { timeout: 20000 });
+  await waitUntil(page, () => !document.querySelector('#pending') && !document.querySelector('.no-signal') && document.querySelectorAll('#view .timeline li').length === 2, null, { timeout: 20000 });
   await context.unroute('**/api/**');
   const notes = await store.listNotes('org-a');
   assert.equal(notes.length, 2);
