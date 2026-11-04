@@ -26,10 +26,11 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { requireUser, requireManager, requireService, sessionFor, devSignInEnabled } from './lib/auth.js';
+import { requireUser, requireManager, requireService, requireExport, sessionFor, devSignInEnabled } from './lib/auth.js';
 import { createTicketVerifier, cockpitUrl, frameHeaders } from './lib/cockpit.js';
 import { createCockpitLink } from './lib/cockpit-link.js';
-import { publicErrorBody, logSafeError, PublicError } from './lib/public-error.js';
+import { publicErrorBody, logSafeError, normalizePublicError, requestContext, PublicError } from './lib/public-error.js';
+import { errorReporter, installCrashHandlers } from './lib/error-tracking.js';
 import { openStore } from './lib/store.js';
 import { toCsv } from './lib/csv.js';
 import { readSheet, cleanMapping, mappedRows, previewOf, nameKey, phoneKey, readDay, MAX_ROWS } from './lib/import-map.js';
@@ -44,6 +45,8 @@ const isId = (v) => ID.test(String(v || ''));
 // Who may come in at all: either of the app's permissions from Cockpit.
 export const CAN_ENTER = (perms) => perms.includes('use') || perms.includes('manage');
 export const APP_NAME = 'Vault';
+// The activity log rows an organization export carries, newest first.
+const EXPORT_ACTIVITY_LIMIT = 100000;
 
 export function createApp({
   store,
@@ -370,6 +373,25 @@ export function createApp({
     res.json(rollup({ from, to, clients: [...live, ...archived], notes, posts: [...posts, ...replies] }, asOf));
   }));
 
+  // ---- for Cockpit's server only: the organization's whole record ----
+  // Cockpit's "Export everything" asks for this with its export token and
+  // the organization in X-TSS-Org, and zips it with the other apps' exports.
+  // Everything this organization has, struck notes, archived clients and
+  // removed posts included, since nothing in Vault is deleted.
+
+  app.get('/api/export/org', requireExport, wrap(async (req, res) => {
+    const org = req.user.org_id;
+    const [live, archived, notes, posts, activity] = await Promise.all([
+      store.listClients(org), store.listClients(org, { archived: true }), store.listNotes(org), store.allPosts(org), store.activity(org, EXPORT_ACTIVITY_LIMIT),
+    ]);
+    const clients = [...live, ...archived];
+    audit(req, 'export.org', 'everything', `${clients.length} clients, ${notes.length} case notes, ${posts.length} posts`);
+    res.json({
+      schema: 'tss.org-export/v1', app: 'vault', org_id: org, exported_at: new Date().toISOString(),
+      tables: { clients, case_notes: notes, posts, activity }, files: [],
+    });
+  }));
+
   // ---- for another TSS app's server: the directory lookup at intake ----
   // Circles looks a client up here when it opens a case, so staff pick a
   // person already in the directory instead of typing them again. Open
@@ -531,12 +553,13 @@ export function createApp({
   app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
   app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-  app.use((err, _req, res, _next) => {
+  app.use((err, req, res, _next) => {
     if (err?.type === 'entity.too.large') err = new PublicError(413, 'too_large', 'That upload is too large. Import at most a few thousand rows at a time.');
     if (err?.type === 'entity.parse.failed') err = new PublicError(400, 'bad_json', 'The request body was not valid JSON.');
-    const body = publicErrorBody(err);
-    logSafeError(console, err, 'request_failed');
-    res.status(err && err.status >= 400 && err.status < 600 ? err.status : 500).json(body);
+    // One diagnostic id for the user's message, the log and the error tracker.
+    const normalized = normalizePublicError(err);
+    logSafeError(console, normalized, 'request_failed', requestContext(req));
+    res.status(err && err.status >= 400 && err.status < 600 ? err.status : normalized.status).json(publicErrorBody(normalized));
   });
 
   return app;
@@ -544,6 +567,7 @@ export function createApp({
 
 const PORT = Number(process.env.PORT) || 8796;
 if (process.env.NODE_ENV !== 'test' && process.argv[1] === fileURLToPath(import.meta.url)) {
+  installCrashHandlers(errorReporter('tss-vault'));
   const store = await openStore();
   const cockpitLink = await createCockpitLink({ audience: 'vault', canEnter: CAN_ENTER, pool: store.kind === 'postgres' ? store.pool : null }).init();
   const server = createApp({ store, cockpitLink }).listen(PORT, () => console.log(`vault listening on ${PORT} (${store.kind} store)`));

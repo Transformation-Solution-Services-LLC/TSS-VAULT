@@ -59,3 +59,12 @@ and `VAULT_SERVICE_TOKEN`. In the TSS suite it is deployed from
 TSS-FullStack's `render.yaml` as `tss-vault`.
 
 Copyright Transformation Solution Services, LLC.
+
+## Error tracking and organization export
+
+| Variable | What it does |
+|---|---|
+| `ERROR_TRACKING_DSN` | A Sentry project's DSN (or GlitchTip or Bugsink). Server errors and crashes go there, scrubbed: ids, never people. Blank keeps tracking off. |
+| `EXPORT_TOKEN` | Held by Cockpit only. Lets Cockpit's "Export everything" read `GET /api/export/org` for one organization (X-TSS-Org). Blank turns export off. |
+
+The export is `tss.org-export/v1`: `{ schema, app, org_id, exported_at, tables: { name: [rows] }, files: [{ path, href, media_type }] }`. Every request is in the activity log as `export.org`.

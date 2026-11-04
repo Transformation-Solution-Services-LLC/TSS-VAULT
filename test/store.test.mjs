@@ -116,6 +116,8 @@ for (const [name, open] of stores) {
       assert.equal(removed.removed_by, 'Dana');
       assert.deepEqual((await store.listPosts('org-a')).map((p) => p.body), ['First']);
       assert.equal((await store.listPosts('org-a', { removed: true })).length, 2, 'kept for the record');
+      assert.deepEqual((await store.allPosts('org-a')).map((p) => p.body).sort(), ['About Ana', 'First', 'Reply'], 'the export has every post and reply, removed ones too');
+      assert.deepEqual(await store.allPosts('org-b'), []);
     } finally { await store.close(); }
   });
 

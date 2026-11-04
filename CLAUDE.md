@@ -10,6 +10,7 @@ buttons: Message Board, Case Notes, Directory. See README.md.
 - `lib/records.js` the check-in rule, client summaries, local days and Cockpit's rollup. Pure functions over the store's rows.
 - `lib/csv.js` CSV in and out.
 - `lib/cockpit.js` launch-ticket verification (same as Library, Rollodex, Sherlock and Watson). `lib/auth.js` sessions and the service token.
+- `lib/error-tracking.js` sends 5xx errors and crashes to a Sentry-format tracker, scrubbed. Off without `ERROR_TRACKING_DSN`. Same file as Sherlock and Watson.
 - `public/` vanilla ES modules, no build step. `public/util.js` holds the DOM-free helpers tests import.
 
 ## Dev / test
@@ -34,6 +35,8 @@ DEV_SIGNIN=on npm start                     # http://localhost:8796
 - **Both stores keep the same contract.** Change one, change the other, and extend `test/store.test.mjs`.
 - **Schema changes are additive** (`CREATE ... IF NOT EXISTS`, new nullable columns). No destructive migrations on start.
 - **Never forward an upstream error body.** Use `PublicError`.
+- **The error tracker gets ids, never people.** No bodies, headers, names, emails or query strings; keep `test/error-tracking.test.mjs` passing.
+- **Organization export is Cockpit's alone.** `GET /api/export/org` answers only `EXPORT_TOKEN` (never the service token other apps hold), with the organization in X-TSS-Org, and returns everything that organization has as `tss.org-export/v1`. It is logged in the activity log.
 - **CI needs no secrets.** Postgres runs as a CI service; Cockpit is a stand-in.
 - **The look is the shared TSS app shell** (Library, Sherlock, Watson, Circles, Rollodex): cream page, light side column with the brand mark upper left, system font, Cockpit's theme tokens between `/* tss-theme:start */` and `/* tss-theme:end */`.
 

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 process.env.NODE_ENV = 'test';
 process.env.SESSION_SECRET = 'test-secret';
 process.env.VAULT_SERVICE_TOKEN = 'vault-svc';
+process.env.EXPORT_TOKEN = 'vault-export';
 
 const { createApp } = await import('../server.js');
 const { MemoryStore } = await import('../lib/store-memory.js');
@@ -272,6 +273,42 @@ test('Cockpit reads counts with the service token, never a name or a note', asyn
     // The service token opens nothing else.
     assert.equal((await t.call('GET', '/api/clients', null, null, svc)).status, 401);
     assert.equal((await t.call('GET', '/api/notes', null, null, svc)).status, 401);
+  } finally { t.close(); }
+});
+
+test('Cockpit\'s export token reads the organization\'s whole record, and only that', async () => {
+  const t = await setup();
+  try {
+    const ana = await t.ok('POST', '/api/clients', { first_name: 'Ana', last_name: 'Reyes', intake_on: '2026-08-01' });
+    const note = await t.ok('POST', `/api/clients/${ana.id}/notes`, { date: '2026-10-30', kind: 'progress', body: 'Met at school.' }, t.reader);
+    await t.ok('POST', `/api/notes/${note.id}/strike`, { reason: 'Wrong client' }, t.manager, 200);
+    const post = await t.ok('POST', '/api/posts', { body: 'Staff meeting moved.' }, t.reader);
+    await t.ok('POST', `/api/posts/${post.id}/replies`, { body: 'Thanks.' }, t.reader2);
+    await t.store.updatePost('org-a', post.id, { removed_at: '2026-11-03T10:00:00.000Z', removed_by: 'Dana' });
+    await t.ok('POST', '/api/clients', { first_name: 'Bo', last_name: 'Other' }, t.other);
+
+    const exp = { Authorization: 'Bearer vault-export', 'X-TSS-Org': 'org-a' };
+    assert.equal((await t.call('GET', '/api/export/org')).status, 401);
+    assert.equal((await t.call('GET', '/api/export/org', null, t.manager)).status, 401, 'a person\'s session is not the export token');
+    assert.equal((await t.call('GET', '/api/export/org', null, null, { Authorization: 'Bearer vault-svc', 'X-TSS-Org': 'org-a' })).status, 401, 'the service token does not export');
+    assert.equal((await t.call('GET', '/api/export/org', null, null, { Authorization: 'Bearer vault-export' })).status, 400, 'the organization is named');
+    const r = await t.call('GET', '/api/export/org', null, null, exp);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.schema, 'tss.org-export/v1');
+    assert.equal(r.body.app, 'vault');
+    assert.equal(r.body.org_id, 'org-a');
+    assert.deepEqual(r.body.tables.clients.map((c) => c.first_name), ['Ana']);
+    assert.equal(r.body.tables.case_notes.length, 1);
+    assert.equal(r.body.tables.case_notes[0].strike_reason, 'Wrong client', 'struck notes stay on the record');
+    assert.deepEqual(r.body.tables.posts.map((p) => p.body).sort(), ['Staff meeting moved.', 'Thanks.'], 'removed posts and replies included');
+    assert.ok(r.body.tables.activity.some((a) => a.action === 'note.strike'));
+    assert.ok(!r.text.includes('Other'), 'nothing from another organization');
+    const theirs = await t.call('GET', '/api/export/org', null, null, { ...exp, 'X-TSS-Org': 'org-b' });
+    assert.deepEqual(theirs.body.tables.clients.map((c) => c.first_name), ['Bo']);
+    assert.ok((await t.store.activity('org-a')).some((a) => a.action === 'export.org'), 'the export is in the activity log');
+    // The export token opens nothing else.
+    assert.equal((await t.call('GET', '/api/clients', null, null, exp)).status, 401);
+    assert.equal((await t.call('GET', '/api/cockpit/rollup', null, null, exp)).status, 401);
   } finally { t.close(); }
 });
 
