@@ -26,6 +26,25 @@ pins and removes posts and reads the activity log. Every record belongs to one
 Cockpit organization. Cockpit's dashboard reads counts only, never a name or
 a note.
 
+## Importing the client list
+
+Import (managers, `#/import`, which Cockpit opens directly) takes a CSV in
+three steps: Vault guesses which column fills which field ("Client Name",
+"DOB", "Case Manager", "Intake Date" and the like are recognized), the person
+changes any match, and a check lists every row (new, update, already there,
+skipped with the reason) before anything is saved. Dates may be written
+3/31/2026 or 2026-03-31. Status words such as Open, Waiting and Closed read as
+active, waitlist and inactive.
+
+A client already in the directory is matched by email, then by name with the
+same date of birth or phone, then by name alone when nothing on file tells
+the two apart; a match is only filled in. Importing the same sheet twice
+changes nothing the second time.
+
+API: `POST /api/import/clients/preview {csv}` answers the columns, samples,
+fields and guessed mapping; `POST /api/import/clients {csv, mapping,
+dry_run}` checks or imports (`mapping` is `{ field_id: column_index }`).
+
 ## Run it
 
 ```

@@ -32,7 +32,8 @@ import { createCockpitLink } from './lib/cockpit-link.js';
 import { publicErrorBody, logSafeError, normalizePublicError, requestContext, PublicError } from './lib/public-error.js';
 import { errorReporter, installCrashHandlers } from './lib/error-tracking.js';
 import { openStore } from './lib/store.js';
-import { csvToObjects, toCsv } from './lib/csv.js';
+import { toCsv } from './lib/csv.js';
+import { readSheet, cleanMapping, mappedRows, previewOf, nameKey, phoneKey, readDay, MAX_ROWS } from './lib/import-map.js';
 import {
   CLIENT_STATUSES, NOTE_KINDS, CHECKIN_DAYS,
   isDay, today, daysBetween, displayName, summarizeClients, rollup, needsYou,
@@ -391,6 +392,23 @@ export function createApp({
     });
   }));
 
+  // ---- for another TSS app's server: the directory lookup at intake ----
+  // Circles looks a client up here when it opens a case, so staff pick a
+  // person already in the directory instead of typing them again. Open
+  // clients only, at most ten, and only the fields an intake form fills.
+  // Every lookup is logged with the app and the person asking, never with
+  // what was typed. Nothing is written.
+
+  const DIRECTORY_FIELDS = ['id', 'first_name', 'last_name', 'preferred_name', 'pronouns', 'date_of_birth', 'email', 'phone', 'program', 'status'];
+  app.get('/api/service/clients', requireService, wrap(async (req, res) => {
+    const q = str(req.query.q, 100);
+    if (q.length < 2) throw bad('query_too_short', 'Type at least two letters of the name');
+    const who = str(req.headers['x-tss-user'], 120) || 'a staff member';
+    const found = (await store.listClients(req.user.org_id, { q })).slice(0, 10);
+    audit(req, 'directory.lookup', `${found.length} match${found.length === 1 ? '' : 'es'}`, `by ${who}`);
+    res.json({ clients: found.map((c) => Object.fromEntries(DIRECTORY_FIELDS.map((k) => [k, c[k] ?? '']))) });
+  }));
+
   // Cockpit's "Needs you" list for one signed-in person (lib/records.js
   // needsYou): mentions, replies to their threads, their clients' check-ins.
   // Cockpit names the person in X-TSS-User (their Cockpit id, the same as a
@@ -421,41 +439,107 @@ export function createApp({
     res.send(toCsv([...CLIENT_COLUMNS, 'last_note', 'note_count'], rows));
   }));
 
-  // Clients from a spreadsheet. Columns by name (any order, any case). A row
-  // whose email matches an existing client updates that client instead of
-  // making a twin.
+  // Clients from a spreadsheet, in three steps: preview reads the columns and
+  // guesses which field each fills; a dry run (dry_run: true) says row by row
+  // what an import would do and writes nothing; the import does it. A client
+  // already in the directory is matched (email, then name with the same date
+  // of birth or phone, then name alone when nothing on either side tells them
+  // apart) and the row fills in what it gives, so the same sheet imported
+  // twice changes nothing the second time.
+  const CLIENT_FIELDS = [
+    { id: 'first_name', label: 'First name', aliases: ['first', 'firstname', 'given_name', 'client_first_name'] },
+    { id: 'last_name', label: 'Last name', aliases: ['last', 'lastname', 'surname', 'family_name', 'client_last_name'] },
+    { id: 'full_name', label: 'Full name (split into first and last)', aliases: ['name', 'full_name', 'client', 'client_name', 'participant', 'participant_name', 'youth', 'youth_name'] },
+    { id: 'preferred_name', label: 'Preferred name', aliases: ['nickname', 'goes_by', 'chosen_name'] },
+    { id: 'pronouns', label: 'Pronouns', aliases: ['pronoun'] },
+    { id: 'date_of_birth', label: 'Date of birth', aliases: ['dob', 'birthdate', 'birth_date', 'birthday', 'born'] },
+    { id: 'email', label: 'Email', aliases: ['email_address', 'e_mail', 'e_mail_address'] },
+    { id: 'phone', label: 'Phone', aliases: ['phone_number', 'telephone', 'tel', 'mobile', 'cell', 'cell_phone'] },
+    { id: 'address', label: 'Address', aliases: ['mailing_address', 'street', 'street_address', 'home_address'] },
+    { id: 'program', label: 'Program', aliases: ['service', 'program_name', 'track'] },
+    { id: 'status', label: 'Status', hint: CLIENT_STATUSES.join(', '), aliases: ['client_status', 'state'] },
+    { id: 'assigned_to', label: 'Assigned to', aliases: ['case_worker', 'caseworker', 'case_manager', 'staff', 'worker', 'assigned', 'counselor', 'advocate'] },
+    { id: 'intake_on', label: 'Intake date', aliases: ['intake_date', 'intake', 'enrolled', 'enrollment_date', 'start_date', 'date_enrolled'] },
+    { id: 'emergency_contact', label: 'Emergency contact', aliases: ['emergency', 'emergency_contact_name', 'guardian', 'parent_guardian'] },
+    { id: 'tags', label: 'Tags', aliases: ['tag', 'groups', 'labels'] },
+    { id: 'summary', label: 'Summary', aliases: ['notes', 'note', 'comments', 'description', 'background'] },
+  ];
+  const STATUS_WORDS = { open: 'active', current: 'active', enrolled: 'active', waiting: 'waitlist', wait_list: 'waitlist', waitlisted: 'waitlist', pending: 'waitlist', closed: 'inactive', discharged: 'inactive', exited: 'inactive', former: 'inactive' };
+  const splitName = (full) => {
+    const s = str(full, 240);
+    if (!s) return ['', ''];
+    if (s.includes(',')) { const [last, ...rest] = s.split(','); return [rest.join(' ').trim(), last.trim()]; }
+    const parts = s.split(/\s+/);
+    return parts.length > 1 ? [parts.slice(0, -1).join(' '), parts.at(-1)] : [parts[0], ''];
+  };
+
+  app.post('/api/import/clients/preview', requireManager, wrap(async (req, res) => {
+    const sheet = readSheet(str((req.body || {}).csv, 6_000_000));
+    if (!sheet.headers.length) throw bad('empty_csv', 'The file is empty');
+    res.json(previewOf(sheet, CLIENT_FIELDS));
+  }));
+
   app.post('/api/import/clients', requireManager, wrap(async (req, res) => {
-    const rows = csvToObjects(str((req.body || {}).csv, 6_000_000));
-    if (!rows.length) throw bad('empty_csv', 'The file has no rows under its header');
-    if (rows.length > 5000) throw bad('too_many_rows', 'Import at most 5,000 rows at a time');
+    const b = req.body || {};
+    const dry = Boolean(b.dry_run);
+    const sheet = readSheet(str(b.csv, 6_000_000));
+    if (!sheet.rows.length) throw bad('empty_csv', 'The file has no rows under its header');
+    if (sheet.rows.length > MAX_ROWS) throw bad('too_many_rows', `Import at most ${MAX_ROWS.toLocaleString('en-US')} rows at a time`);
+    const rows = mappedRows(sheet, cleanMapping(b.mapping, sheet.headers, CLIENT_FIELDS));
     const org = req.user.org_id;
     const existing = [...(await store.listClients(org)), ...(await store.listClients(org, { archived: true }))];
-    const byEmail = new Map(existing.filter((c) => c.email).map((c) => [c.email, c]));
-    const result = { added: 0, updated: 0, skipped: [] };
+    const byEmail = new Map(); const byName = new Map();
+    const remember = (c) => {
+      if (c.email) byEmail.set(c.email.toLowerCase(), c);
+      const k = nameKey(c.first_name, c.last_name);
+      if (k) byName.set(k, [...(byName.get(k) || []), c]);
+    };
+    existing.forEach(remember);
+    const differ = (a, b) => Boolean(a && b && a !== b);
+    const find = (g) => {
+      if (g.email && byEmail.has(g.email)) return byEmail.get(g.email);
+      const same = byName.get(nameKey(g.first_name || '', g.last_name || '')) || [];
+      // Same name, and nothing on file says it is someone else.
+      const fits = same.filter((c) => !differ(c.email, g.email) && !differ(c.date_of_birth, g.date_of_birth) && !differ(phoneKey(c.phone), phoneKey(g.phone)));
+      const strong = fits.filter((c) => (g.date_of_birth && c.date_of_birth === g.date_of_birth) || (phoneKey(g.phone) && phoneKey(c.phone) === phoneKey(g.phone)));
+      return strong[0] || (fits.length === 1 ? fits[0] : null);
+    };
+    const result = { dry_run: dry, added: 0, updated: 0, unchanged: 0, skipped: [], plan: [] };
+    const plan = (p) => { if (result.plan.length < 200) result.plan.push(p); };
     for (const [i, r] of rows.entries()) {
       const line = i + 2;
       try {
-        const given = {
-          first_name: r.first_name || r.first, last_name: r.last_name || r.last, preferred_name: r.preferred_name || r.nickname,
-          pronouns: r.pronouns, date_of_birth: r.date_of_birth || r.dob || r.birthdate, email: r.email, phone: r.phone, address: r.address,
-          program: r.program, status: (r.status || '').toLowerCase() || undefined, assigned_to: r.assigned_to || r.case_worker || r.caseworker || r.staff,
-          intake_on: r.intake_on || r.intake_date || r.intake, emergency_contact: r.emergency_contact, tags: r.tags, summary: r.summary || r.notes,
-        };
-        const match = given.email ? byEmail.get(String(given.email).toLowerCase()) : null;
+        const [first, last] = splitName(r.full_name);
+        const status = (r.status || '').toLowerCase().trim().replace(/\s+/g, '_');
+        const given = Object.fromEntries(Object.entries({
+          first_name: r.first_name || first, last_name: r.last_name || last, preferred_name: r.preferred_name,
+          pronouns: r.pronouns, date_of_birth: readDay(r.date_of_birth), email: (r.email || '').toLowerCase(), phone: r.phone, address: r.address,
+          program: r.program, status: STATUS_WORDS[status] || status || undefined, assigned_to: r.assigned_to,
+          intake_on: readDay(r.intake_on), emergency_contact: r.emergency_contact, tags: r.tags, summary: r.summary,
+        }).filter(([, v]) => v !== undefined && v !== ''));
+        const match = find(given);
         if (match) {
-          const patch = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== undefined && v !== ''));
-          await store.updateClient(org, match.id, { ...clientFields(patch, match), updated_by: req.user.name });
+          const patch = clientFields(given, match);
+          const changed = Object.keys(patch).filter((k) => JSON.stringify(patch[k]) !== JSON.stringify(match[k] ?? (k === 'tags' ? [] : '')));
+          if (!changed.length) { result.unchanged++; plan({ line, action: 'same', name: displayName(match) }); continue; }
+          if (!dry) await store.updateClient(org, match.id, { ...patch, updated_by: req.user.name });
+          Object.assign(match, patch);
           result.updated++;
+          plan({ line, action: 'update', name: displayName(match), detail: changed.join(', ') });
         } else {
-          const c = await store.createClient(org, { id: crypto.randomUUID(), ...clientFields(given), created_by: req.user.name });
-          if (c.email) byEmail.set(c.email, c);
+          const fields = clientFields(given);
+          const c = dry ? { id: `new-${line}`, ...fields } : await store.createClient(org, { id: crypto.randomUUID(), ...fields, created_by: req.user.name });
+          remember(c);
           result.added++;
+          plan({ line, action: 'add', name: displayName(c) });
         }
       } catch (e) {
-        result.skipped.push({ line, reason: e instanceof PublicError ? e.message : 'Could not read this row' });
+        const reason = e instanceof PublicError ? e.message : 'Could not read this row';
+        result.skipped.push({ line, reason });
+        plan({ line, action: 'skip', reason });
       }
     }
-    audit(req, 'import.clients', `${result.added} added, ${result.updated} updated`, result.skipped.length ? `${result.skipped.length} skipped` : '');
+    if (!dry) audit(req, 'import.clients', `${result.added} added, ${result.updated} updated`, [result.unchanged && `${result.unchanged} already there`, result.skipped.length && `${result.skipped.length} skipped`].filter(Boolean).join(', '));
     res.json(result);
   }));
 

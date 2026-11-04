@@ -161,3 +161,11 @@ details.card summary { cursor: pointer; font-weight: 600; }
 .card > h3:first-child, .form > h3:first-child { margin-top: 0; }
 .post .ptools { margin-left: auto; display: flex; gap: .3rem; }
 .post .ptools button, .timeline li > button { font-size: .8rem; padding: .15rem .5rem; align-self: flex-start; }
+
+/* Spreadsheet import */
+.file-pick { display: inline-block; position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; padding: .5rem .9rem; background: var(--surface); cursor: pointer; margin-right: .6rem; }
+.file-pick:hover { border-color: var(--primary); }
+.file-pick input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.import-map select { min-width: 12rem; max-width: 100%; }
+.import-actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+.small-text { font-size: .8rem; }
