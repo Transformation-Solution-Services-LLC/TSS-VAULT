@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 
 import { requireUser, requireManager, requireService, sessionFor, devSignInEnabled } from './lib/auth.js';
 import { createTicketVerifier, cockpitUrl, frameHeaders } from './lib/cockpit.js';
+import { createCockpitLink } from './lib/cockpit-link.js';
 import { publicErrorBody, logSafeError, PublicError } from './lib/public-error.js';
 import { openStore } from './lib/store.js';
 import { csvToObjects, toCsv } from './lib/csv.js';
@@ -39,11 +40,15 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isId = (v) => ID.test(String(v || ''));
+// Who may come in at all: either of the app's permissions from Cockpit.
+export const CAN_ENTER = (perms) => perms.includes('use') || perms.includes('manage');
 export const APP_NAME = 'Vault';
 
 export function createApp({
   store,
   verifyTicket = createTicketVerifier({ audience: 'vault' }),
+  // Access changes from Cockpit and the audit trail Cockpit reads (lib/cockpit-link.js).
+  cockpitLink = createCockpitLink({ audience: 'vault', canEnter: CAN_ENTER }),
   clock = () => today(),
 } = {}) {
   if (!store) throw new Error('createApp needs a store');
@@ -62,8 +67,14 @@ export function createApp({
   app.use(express.json({ limit: '8mb' }));
 
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+  app.locals.cockpitLink = cockpitLink;
+  cockpitLink.routes(app, { wrap });
   const str = (v, max) => String(v ?? '').trim().slice(0, max);
-  const audit = (req, action, target, detail = '') => store.log(req.user.org_id, { actor: req.user.name, action, target, detail }).catch((e) => logSafeError(console, e, 'audit_failed'));
+  // The app's own activity list, and the trail Cockpit reads into its one audit log.
+  const audit = (req, action, target, detail = '') => {
+    cockpitLink.record({ org: req.user.org_id, actorId: req.user.id, actor: req.user.name, email: req.user.email, action, target, detail, ip: req.ip });
+    return store.log(req.user.org_id, { actor: req.user.name, action, target, detail }).catch((e) => logSafeError(console, e, 'audit_failed'));
+  };
   const bad = (code, message) => new PublicError(400, code, message);
   const notFound = (what) => new PublicError(404, 'not_found', `No such ${what}`);
   const forbidden = (message) => new PublicError(403, 'not_permitted', message);
@@ -127,6 +138,7 @@ export function createApp({
       throw new PublicError(403, 'not_permitted', `Your role in Cockpit does not include ${APP_NAME}. Ask your administrator.`);
     }
     if (!person.permissions.includes('use')) person.permissions = [...person.permissions, 'use'];
+    await cockpitLink.record({ org: person.org.id, actorId: person.sub, actor: person.name, email: person.email, action: 'signin', detail: person.permissions.join(', '), ip: req.ip });
     res.json(signedIn(person));
   }));
 
@@ -449,7 +461,8 @@ export function createApp({
 const PORT = Number(process.env.PORT) || 8796;
 if (process.env.NODE_ENV !== 'test' && process.argv[1] === fileURLToPath(import.meta.url)) {
   const store = await openStore();
-  const server = createApp({ store }).listen(PORT, () => console.log(`vault listening on ${PORT} (${store.kind} store)`));
+  const cockpitLink = await createCockpitLink({ audience: 'vault', canEnter: CAN_ENTER, pool: store.kind === 'postgres' ? store.pool : null }).init();
+  const server = createApp({ store, cockpitLink }).listen(PORT, () => console.log(`vault listening on ${PORT} (${store.kind} store)`));
   const stop = () => server.close(() => store.close().finally(() => process.exit(0)));
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
