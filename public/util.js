@@ -25,3 +25,13 @@ export function age(dob, asOf) {
   const [ty, tm, td] = asOf.split('-').map(Number);
   return ty - y - (tm < m || (tm === m && td < d) ? 1 : 0);
 }
+
+// The screen Cockpit asked to open with a launch ticket (#tss_launch=...&tss_to=...).
+// Only a plain hash route is accepted; anything else opens the home screen.
+export function launchRoute(hash) {
+  const m = /(?:^#|&)tss_to=([^&]+)/.exec(String(hash || ''));
+  if (!m) return '';
+  let to = '';
+  try { to = decodeURIComponent(m[1]); } catch (_) { return ''; }
+  return /^#\/[A-Za-z0-9/_?=&.-]{0,300}$/.test(to) ? to : '';
+}

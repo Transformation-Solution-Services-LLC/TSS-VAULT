@@ -2,7 +2,7 @@
 // launch tickets signed the way TSS-Dashboard signs them (apps/api/src/launch.ts).
 
 import crypto from 'node:crypto';
-import { createTicketVerifier } from '../lib/cockpit.js';
+import { createMessageVerifier, createTicketVerifier } from '../lib/cockpit.js';
 
 export const COCKPIT = 'https://cockpit.test';
 
@@ -31,9 +31,16 @@ export function fakeCockpit(audience, { url = COCKPIT, now = () => Date.now() } 
     return `${head}.${body}.${sig}`;
   }
 
+  // A server-to-server message, signed the way appLink.ts signs one.
+  function message(use, over = {}, opts = {}) {
+    return ticket({ sub: 'cockpit', use, name: undefined, email: undefined, role: undefined, permissions: undefined, ...over }, opts);
+  }
+
   return {
     ticket,
+    message,
     verifyTicket: createTicketVerifier({ audience, url, fetchImpl, now }),
+    verifyMessage: (use) => createMessageVerifier({ audience, use, url, fetchImpl, now }),
     keyFetches: () => keyFetches,
   };
 }
