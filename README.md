@@ -26,6 +26,17 @@ pins and removes posts and reads the activity log. Every record belongs to one
 Cockpit organization. Cockpit's dashboard reads counts only, never a name or
 a note.
 
+## On a phone
+
+Vault installs as an app from the browser (Share, then Add to Home Screen on
+an iPhone; Install app on Android). On a phone the menu is a bar along the
+bottom. A case note saved with no signal waits on the phone, with a count on
+Case Notes, and is sent when the signal is back; the server takes the phone's
+id for it, so a resend is never a second note. The phone keeps only the app's
+own files and the notes waiting to go out, never client records; notes wait
+at most 7 days and leave when someone else signs in on the same browser.
+`test/mobile-e2e.test.mjs` runs the whole flow in a phone-sized browser.
+
 ## Importing the client list
 
 Import (managers, `#/import`, which Cockpit opens directly) takes a CSV in

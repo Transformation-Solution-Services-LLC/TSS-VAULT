@@ -45,6 +45,28 @@ jobs:
       - name: Production dependencies have no known vulnerabilities
         run: npm audit --omit=dev --audit-level=high
 
+  # Case notes on a phone with no signal, in a real browser (test/mobile-e2e.test.mjs).
+  mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: Install the browser
+        run: npm install --no-save --no-audit --no-fund playwright@1.49.1 && npx playwright install --with-deps chromium
+      - name: Offline case notes on a phone
+        run: REQUIRE_BROWSER=1 SCREENSHOT_DIR=mobile-screens node --test test/mobile-e2e.test.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mobile-screens
+          path: mobile-screens/
+          if-no-files-found: ignore
+
   docker:
     runs-on: ubuntu-latest
     steps:
