@@ -4,7 +4,7 @@
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
-import { esc, day, when, KIND, STATUS, ago, age } from './util.js';
+import { esc, day, when, KIND, STATUS, ago, age, launchRoute } from './util.js';
 import { mountImporter } from './importer.js';
 
 const state = { token: null, name: '', org: '', canManage: false, me: null, today: new Date().toISOString().slice(0, 10) };
@@ -59,9 +59,9 @@ async function download(path, name) {
 function takeTicket() {
   const m = /(?:^#|&)tss_launch=([^&]+)/.exec(location.hash);
   if (!m) return null;
-  // Cockpit may name a page to open on, e.g. #/import&tss_launch=...
-  const route = location.hash.slice(1).replace(/&?tss_launch=[^&]*/, '').replace(/^&/, '');
-  history.replaceState(null, '', location.pathname + location.search + (/^\/[\w/-]*$/.test(route) ? `#${route}` : ''));
+  // Cockpit may name the screen to open: tss_to (its "Needs you" list), or a page before the ticket (#/import&tss_launch=...).
+  const route = location.hash.slice(1).replace(/&?tss_launch=[^&]*/, '').replace(/&?tss_to=[^&]*/, '').replace(/^&/, '');
+  history.replaceState(null, '', location.pathname + location.search + (launchRoute(location.hash) || (/^\/[\w/-]*$/.test(route) ? `#${route}` : '')));
   return decodeURIComponent(m[1]);
 }
 
@@ -213,7 +213,7 @@ function postHtml(p, { reply = false } = {}) {
   ].join('');
   const meta = `<div class="meta"><strong>${esc(p.created_by)}</strong><span>${esc(when(p.created_at))}</span>${p.pinned ? '<span class="badge accent">Pinned</span>' : ''}${p.client_id ? `<a class="badge" href="#/directory/${esc(p.client_id)}">${esc(p.client_name)}</a>` : ''}${tools ? `<span class="ptools">${tools}</span>` : ''}</div>`;
   if (reply) return `<li>${meta}<div class="body">${esc(p.body)}</div></li>`;
-  return `<li class="post ${p.pinned ? 'pinned' : ''}">${meta}<div class="body">${esc(p.body)}</div>
+  return `<li class="post ${p.pinned ? 'pinned' : ''}" id="post-${esc(p.id)}">${meta}<div class="body">${esc(p.body)}</div>
     ${p.replies.length ? `<ul class="replies">${p.replies.map((r) => postHtml(r, { reply: true })).join('')}</ul>` : ''}
     <form class="reply-form" data-reply="${esc(p.id)}"><input name="body" placeholder="Reply" aria-label="Reply"><button class="small">Reply</button></form></li>`;
 }
@@ -246,6 +246,10 @@ async function showBoard() {
     try { await api('/api/posts', { method: 'POST', body: { body: e.target.elements.body.value } }); showBoard(); } catch (err) { $('#compose-error').textContent = err.message; }
   });
   wireBoard(showBoard);
+  // Opened from Cockpit's Needs you list: bring that thread into view.
+  const wanted = params().get('post');
+  const el = wanted && document.getElementById(`post-${wanted}`);
+  if (el) { el.classList.add('focus'); el.scrollIntoView({ block: 'center' }); }
 }
 
 // ---- case notes ----

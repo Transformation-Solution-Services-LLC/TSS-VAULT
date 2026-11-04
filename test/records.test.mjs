@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { localDay, daysBetween, displayName, needsCheckin, summarizeClients, monthsBetween, rollup, CHECKIN_DAYS } from '../lib/records.js';
+import { localDay, daysBetween, displayName, needsCheckin, summarizeClients, monthsBetween, rollup, mentions, CHECKIN_DAYS } from '../lib/records.js';
 
 test('a moment is dated in the organization\'s zone, not in UTC', () => {
   // 8pm in Oregon on November 3 is already November 4 in UTC.
@@ -52,4 +52,14 @@ test('the rollup counts the period and never carries a name', () => {
   });
   assert.deepEqual(r.series.case_notes, [{ month: '2026-01', value: 2 }]);
   assert.doesNotMatch(JSON.stringify(r), /Ana|Ben|Cy|secret/);
+});
+
+test('an @ names a person by first name or full name, not by a longer word or an email', () => {
+  assert.ok(mentions('@Ray can you', 'Ray Ortiz'));
+  assert.ok(mentions('thanks @ray ortiz!', 'Ray Ortiz'));
+  assert.ok(mentions('(@Ray)', 'Ray'));
+  assert.ok(!mentions('@Raymond', 'Ray'));
+  assert.ok(!mentions('ray@example.org', 'Ray'));
+  assert.ok(!mentions('Ray, no at sign', 'Ray'));
+  assert.ok(!mentions('@Ray', ''));
 });

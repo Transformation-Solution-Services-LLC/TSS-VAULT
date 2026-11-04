@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { esc, ago, age } from '../public/util.js';
+import { esc, ago, age, launchRoute } from '../public/util.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pub = path.join(here, '..', 'public');
@@ -56,4 +56,11 @@ test('the page helpers escape and say how long ago and how old', () => {
   assert.equal(age('2010-11-04', '2026-11-03'), 15);
   assert.equal(age('2010-11-03', '2026-11-03'), 16);
   assert.equal(age('', '2026-11-03'), null);
+});
+
+test('a launch from Cockpit may name a screen, and only a plain hash route is kept', () => {
+  assert.equal(launchRoute('#tss_launch=abc&tss_to=%23%2Fboard%3Fpost%3Dp-1'), '#/board?post=p-1');
+  assert.equal(launchRoute('#tss_launch=abc'), '');
+  assert.equal(launchRoute('#tss_launch=abc&tss_to=javascript%3Aalert(1)'), '');
+  assert.equal(launchRoute('#tss_launch=abc&tss_to=%23%2F%3Cimg%3E'), '');
 });
