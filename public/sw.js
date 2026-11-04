@@ -7,7 +7,7 @@
 // new cache and drops the old one. Registered from app.js.
 const VERSION = new URL(self.location.href).searchParams.get('v') || 'dev';
 const CACHE = `tss-vault-shell-${VERSION}`;
-const SHELL = ['/', '/app.js', '/util.js', '/offline.js', '/styles.css', '/manifest.webmanifest',
+const SHELL = ['/', '/app.js', '/util.js', '/offline.js', '/importer.js', '/styles.css', '/manifest.webmanifest',
   '/brand/vault.png', '/brand/tss-wordmark.webp', '/brand/tss-wordmark-light.webp', '/brand/wally.webp', '/icons/icon-192.png', '/icons/apple-touch-icon.png'];
 
 function shouldCache(url) {

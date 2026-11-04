@@ -202,6 +202,42 @@ test('home shows the three buttons\' counts and who is due for a check-in', asyn
   } finally { t.close(); }
 });
 
+test('Cockpit\'s Needs you list for one person: mentions, replies, their check-ins, never a client name', async () => {
+  const t = await setup();
+  try {
+    const svc = { Authorization: 'Bearer vault-svc', 'X-TSS-Org': 'org-a' };
+    const as = (id, name) => ({ ...svc, 'X-TSS-User': id, 'X-TSS-User-Name': encodeURIComponent(name) });
+    assert.equal((await t.call('GET', '/api/cockpit/needs-you', null, t.manager)).status, 401, 'a person\'s session is not the service token');
+    assert.equal((await t.call('GET', '/api/cockpit/needs-you', null, null, svc)).status, 400, 'the person is named');
+    assert.deepEqual((await t.call('GET', '/api/cockpit/needs-you', null, null, as('u-ray', 'Ray'))).body.items, []);
+
+    const ana = await t.ok('POST', '/api/clients', { first_name: 'Ana', last_name: 'Reyes', intake_on: '2026-08-01', assigned_to: 'ray' });
+    await t.ok('POST', '/api/clients', { first_name: 'Ben', last_name: 'Ito', intake_on: '2026-08-01', assigned_to: 'Kim' });
+    const root = await t.ok('POST', '/api/posts', { body: 'Who covers Friday intake?' }, t.reader);
+    const reply = await t.ok('POST', `/api/posts/${root.id}/replies`, { body: '@Ray I can, after 2pm' }, t.reader2);
+    await t.ok('POST', '/api/posts', { body: 'Email ray@example.org about the van' }, t.manager);
+    await t.ok('POST', '/api/posts', { body: '@Raymond is not Ray' }, t.manager);
+    await t.ok('POST', '/api/posts', { body: 'Note to self @Ray' }, t.reader);
+
+    const r = await t.call('GET', '/api/cockpit/needs-you', null, null, as('u-ray', 'Ray'));
+    assert.equal(r.status, 200);
+    const by = Object.fromEntries(r.body.items.map((i) => [i.id, i]));
+    assert.deepEqual(Object.keys(by).sort(), ['checkins', `mention-${reply.id}`, `replies-${root.id}`]);
+    assert.equal(by[`mention-${reply.id}`].title, 'Kim mentioned you on the Message Board');
+    assert.equal(by[`mention-${reply.id}`].to, `#/board?post=${root.id}`, 'opens the thread');
+    assert.equal(by[`replies-${root.id}`].count, 1);
+    assert.equal(by.checkins.count, 1, 'Ana is Ray\'s and has no note since August');
+    assert.equal(by.checkins.to, '#/directory?filter=checkin');
+    assert.ok(!r.text.includes('Ana') && !r.text.includes('Reyes') && !r.text.includes(ana.id), 'no client name or id');
+    assert.ok(!r.text.includes('Friday') && !r.text.includes('2pm'), 'no post text');
+
+    const kim = (await t.call('GET', '/api/cockpit/needs-you', null, null, as('u-kim', 'Kim'))).body.items;
+    assert.deepEqual(kim.map((i) => i.id), ['checkins'], 'Kim wrote the reply, so nothing on the board waits for her');
+    const other = await t.call('GET', '/api/cockpit/needs-you', null, null, { ...as('u-ray', 'Ray'), 'X-TSS-Org': 'org-b' });
+    assert.deepEqual(other.body.items, [], 'another organization sees nothing of org-a');
+  } finally { t.close(); }
+});
+
 test('Cockpit reads counts with the service token, never a name or a note', async () => {
   const t = await setup();
   try {
@@ -260,5 +296,72 @@ test('import and export of the directory are for managers, and an email match up
     assert.match(out.type, /text\/csv/);
     assert.match(out.text, /^first_name,last_name,/);
     assert.match(out.text, /Ana,Reyes/);
+  } finally { t.close(); }
+});
+
+test('import: preview guesses columns, a dry run writes nothing, and the same sheet twice adds nothing', async () => {
+  const t = await setup();
+  try {
+    const sheet = [
+      'Client Name,DOB,Cell Phone,Case Manager,Intake Date,Client Status,Background',
+      '"Reyes, Ana",5/4/2010,541-555-0100,Dana,9/1/2026,Open,referred by school',
+      'Ben Ito,,,,,Waiting,',
+      'Ana Reyes,2010-05-04,,,,,',
+      'Ana Reyes,2011-01-01,,,,,another Ana Reyes',
+    ].join('\n');
+    assert.equal((await t.call('POST', '/api/import/clients/preview', { csv: sheet }, t.reader)).status, 403);
+    const p = await t.ok('POST', '/api/import/clients/preview', { csv: sheet }, t.manager, 200);
+    assert.equal(p.rows, 4);
+    assert.deepEqual(
+      [p.mapping.full_name, p.mapping.date_of_birth, p.mapping.phone, p.mapping.assigned_to, p.mapping.intake_on, p.mapping.status, p.mapping.summary],
+      [0, 1, 2, 3, 4, 5, 6],
+    );
+    const dry = await t.ok('POST', '/api/import/clients', { csv: sheet, mapping: p.mapping, dry_run: true }, t.manager, 200);
+    assert.deepEqual(dry.plan.map((x) => x.action), ['add', 'add', 'same', 'add'], 'same name and birth date is the same client; a different birth date is someone else');
+    assert.equal((await t.ok('GET', '/api/clients')).clients.length, 0, 'a dry run writes nothing');
+
+    const run = await t.ok('POST', '/api/import/clients', { csv: sheet, mapping: p.mapping }, t.manager, 200);
+    assert.deepEqual([run.added, run.updated, run.unchanged, run.skipped.length], [3, 0, 1, 0]);
+    const clients = (await t.ok('GET', '/api/clients')).clients;
+    const ana = clients.find((c) => c.date_of_birth === '2010-05-04');
+    assert.equal(ana.first_name, 'Ana');
+    assert.equal(ana.intake_on, '2026-09-01', 'US dates are read');
+    assert.equal(ana.status, 'active', '"Open" reads as active');
+    assert.equal(clients.find((c) => c.first_name === 'Ben').status, 'waitlist');
+
+    const again = await t.ok('POST', '/api/import/clients', { csv: sheet, mapping: p.mapping }, t.manager, 200);
+    assert.deepEqual([again.added, again.updated, again.unchanged], [0, 0, 4], 'the same sheet twice changes nothing');
+    assert.equal((await t.ok('GET', '/api/clients')).clients.length, 3);
+  } finally { t.close(); }
+});
+
+test('Circles looks a client up for intake with the service token: open clients, intake fields, logged', async () => {
+  const t = await setup();
+  try {
+    const svc = { Authorization: 'Bearer vault-svc', 'X-TSS-Org': 'org-a', 'X-TSS-App': 'circles', 'X-TSS-User': 'Dana Reyes' };
+    await t.ok('POST', '/api/clients', { first_name: 'Ana', last_name: 'Reyes', date_of_birth: '2010-05-04', phone: '541 555 0100', email: 'ana@example.org', program: 'Youth', emergency_contact: 'Mom 555', summary: 'Private summary', address: '1 Main St' });
+    const old = await t.ok('POST', '/api/clients', { first_name: 'Anabel', last_name: 'Gone' });
+    await t.ok('POST', `/api/clients/${old.id}/archive`, {}, t.manager, 200);
+    await t.ok('POST', '/api/clients', { first_name: 'Ana', last_name: 'Elsewhere' }, t.other);
+
+    assert.equal((await t.call('GET', '/api/service/clients?q=ana')).status, 401);
+    assert.equal((await t.call('GET', '/api/service/clients?q=ana', null, t.manager)).status, 401, 'a session is not the service token');
+    assert.equal((await t.call('GET', '/api/service/clients?q=a', null, null, svc)).status, 400, 'two letters at least');
+
+    const r = await t.call('GET', '/api/service/clients?q=ana', null, null, svc);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.clients.length, 1, 'archived and other organizations left out');
+    const [c] = r.body.clients;
+    assert.equal(c.first_name, 'Ana'); assert.equal(c.last_name, 'Reyes'); assert.equal(c.date_of_birth, '2010-05-04'); assert.equal(c.phone, '541 555 0100');
+    assert.doesNotMatch(r.text, /Private summary|Mom 555|Main St/, 'only the fields intake fills');
+
+    const log = (await t.ok('GET', '/api/activity')).activity;
+    const hit = log.find((e) => e.action === 'directory.lookup');
+    assert.ok(hit, 'the lookup is logged');
+    assert.equal(hit.actor, 'circles');
+    assert.match(hit.detail, /Dana Reyes/);
+    assert.doesNotMatch(`${hit.target} ${hit.detail.replace('Dana Reyes', '')}`, /ana/i, 'what was typed is not logged');
+    // Writing stays closed to the service token.
+    assert.equal((await t.call('POST', '/api/clients', { first_name: 'X' }, null, svc)).status, 401);
   } finally { t.close(); }
 });

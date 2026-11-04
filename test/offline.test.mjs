@@ -40,6 +40,8 @@ test('the app shell worker caches the shell only, never /api/, and keys the cach
   const s = sandbox.self.shellRules;
   assert.equal(s.CACHE, 'tss-vault-shell-abc123');
   for (const f of s.SHELL) assert.ok(f === '/' || fs.existsSync(pub(f.slice(1))), `${f} exists`);
+  // Every script the page imports is in the shell, or the app cannot open with no signal.
+  for (const f of fs.readdirSync(new URL('../public/', import.meta.url)).filter((x) => x.endsWith('.js') && x !== 'sw.js')) assert.ok(s.SHELL.includes(`/${f}`), `/${f} is in the app shell`);
   assert.equal(s.shouldCache('https://vault.example/app.js'), true);
   assert.equal(s.shouldCache('https://vault.example/api/clients'), false);
   assert.equal(s.shouldCache('https://vault.example/sw.js'), false);

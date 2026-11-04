@@ -145,6 +145,7 @@ details.card summary { cursor: pointer; font-weight: 600; }
 .posts { list-style: none; margin: 0; padding: 0; display: grid; gap: .8rem; }
 .post { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: .8rem 1rem; }
 .post.pinned { border-color: var(--accent); }
+.post.focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
 .post .meta { font-size: .82rem; color: var(--muted); display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
 .post .body { white-space: pre-wrap; margin: .35rem 0; }
 .post .replies { list-style: none; margin: .5rem 0 0; padding: 0 0 0 1rem; border-left: 2px solid var(--border); display: grid; gap: .5rem; }
@@ -187,3 +188,10 @@ details.card summary { cursor: pointer; font-weight: 600; }
   .modal-card { max-height: 92vh; overflow-y: auto; }
 }
 .nav .badge { background: var(--primary); color: var(--primary-text); font-weight: 700; }
+/* Spreadsheet import */
+.file-pick { display: inline-block; position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; padding: .5rem .9rem; background: var(--surface); cursor: pointer; margin-right: .6rem; }
+.file-pick:hover { border-color: var(--primary); }
+.file-pick input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.import-map select { min-width: 12rem; max-width: 100%; }
+.import-actions { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+.small-text { font-size: .8rem; }
