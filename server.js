@@ -33,7 +33,7 @@ import { openStore } from './lib/store.js';
 import { csvToObjects, toCsv } from './lib/csv.js';
 import {
   CLIENT_STATUSES, NOTE_KINDS, CHECKIN_DAYS,
-  isDay, today, daysBetween, displayName, summarizeClients, rollup,
+  isDay, today, daysBetween, displayName, summarizeClients, rollup, needsYou,
 } from './lib/records.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -355,6 +355,23 @@ export function createApp({
     const [live, archived, notes, posts] = await Promise.all([store.listClients(org), store.listClients(org, { archived: true }), store.listNotes(org), store.listPosts(org)]);
     const replies = await store.listReplies(org, posts.map((p) => p.id));
     res.json(rollup({ from, to, clients: [...live, ...archived], notes, posts: [...posts, ...replies] }, asOf));
+  }));
+
+  // Cockpit's "Needs you" list for one signed-in person (lib/records.js
+  // needsYou): mentions, replies to their threads, their clients' check-ins.
+  // Cockpit names the person in X-TSS-User (their Cockpit id, the same as a
+  // session's) and X-TSS-User-Name (URI-encoded). Never a client's name or a
+  // post's text.
+  app.get('/api/cockpit/needs-you', requireService, wrap(async (req, res) => {
+    const id = str(req.headers['x-tss-user'], 200);
+    if (!id) throw bad('user_required', 'Name the person in X-TSS-User');
+    let name = '';
+    try { name = decodeURIComponent(String(req.headers['x-tss-user-name'] || '')); } catch (_) { name = ''; }
+    const email = str(req.headers['x-tss-user-email'], 200);
+    const org = req.user.org_id;
+    const [clients, notes, posts] = await Promise.all([store.listClients(org), store.listNotes(org), store.listPosts(org)]);
+    const replies = await store.listReplies(org, posts.map((p) => p.id));
+    res.json(needsYou({ clients, notes, posts, replies }, clock(), { id, name: name.slice(0, 120), email }));
   }));
 
   // ---- export and import (CSV), managers only: this is client data ----
