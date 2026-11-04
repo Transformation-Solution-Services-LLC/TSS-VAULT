@@ -262,3 +262,34 @@ test('import and export of the directory are for managers, and an email match up
     assert.match(out.text, /Ana,Reyes/);
   } finally { t.close(); }
 });
+
+test('Circles looks a client up for intake with the service token: open clients, intake fields, logged', async () => {
+  const t = await setup();
+  try {
+    const svc = { Authorization: 'Bearer vault-svc', 'X-TSS-Org': 'org-a', 'X-TSS-App': 'circles', 'X-TSS-User': 'Dana Reyes' };
+    await t.ok('POST', '/api/clients', { first_name: 'Ana', last_name: 'Reyes', date_of_birth: '2010-05-04', phone: '541 555 0100', email: 'ana@example.org', program: 'Youth', emergency_contact: 'Mom 555', summary: 'Private summary', address: '1 Main St' });
+    const old = await t.ok('POST', '/api/clients', { first_name: 'Anabel', last_name: 'Gone' });
+    await t.ok('POST', `/api/clients/${old.id}/archive`, {}, t.manager, 200);
+    await t.ok('POST', '/api/clients', { first_name: 'Ana', last_name: 'Elsewhere' }, t.other);
+
+    assert.equal((await t.call('GET', '/api/service/clients?q=ana')).status, 401);
+    assert.equal((await t.call('GET', '/api/service/clients?q=ana', null, t.manager)).status, 401, 'a session is not the service token');
+    assert.equal((await t.call('GET', '/api/service/clients?q=a', null, null, svc)).status, 400, 'two letters at least');
+
+    const r = await t.call('GET', '/api/service/clients?q=ana', null, null, svc);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.clients.length, 1, 'archived and other organizations left out');
+    const [c] = r.body.clients;
+    assert.equal(c.first_name, 'Ana'); assert.equal(c.last_name, 'Reyes'); assert.equal(c.date_of_birth, '2010-05-04'); assert.equal(c.phone, '541 555 0100');
+    assert.doesNotMatch(r.text, /Private summary|Mom 555|Main St/, 'only the fields intake fills');
+
+    const log = (await t.ok('GET', '/api/activity')).activity;
+    const hit = log.find((e) => e.action === 'directory.lookup');
+    assert.ok(hit, 'the lookup is logged');
+    assert.equal(hit.actor, 'circles');
+    assert.match(hit.detail, /Dana Reyes/);
+    assert.doesNotMatch(`${hit.target} ${hit.detail.replace('Dana Reyes', '')}`, /ana/i, 'what was typed is not logged');
+    // Writing stays closed to the service token.
+    assert.equal((await t.call('POST', '/api/clients', { first_name: 'X' }, null, svc)).status, 401);
+  } finally { t.close(); }
+});
