@@ -96,8 +96,12 @@ test('a phone with no signal: case notes wait on the phone, survive a reload, an
   assert.equal((await store.listNotes('org-a')).length, 0, 'nothing reached the server yet');
 
   // The signal comes back: both go out, once each.
+  // The browser says it is online a moment before the server answers, as on a slow signal: the app keeps trying by itself.
+  let slow = true; await context.route('**/api/**', (r) => (slow ? r.abort('internetdisconnected') : r.continue()));
   await context.setOffline(false);
-  await page.waitForFunction(() => !document.querySelector('#pending') && !document.querySelector('.no-signal') && document.querySelectorAll('#view .timeline li').length === 2, null, { timeout: 15000 });
+  setTimeout(() => { slow = false; }, 1500);
+  await page.waitForFunction(() => !document.querySelector('#pending') && !document.querySelector('.no-signal') && document.querySelectorAll('#view .timeline li').length === 2, null, { timeout: 20000 });
+  await context.unroute('**/api/**');
   const notes = await store.listNotes('org-a');
   assert.equal(notes.length, 2);
   assert.deepEqual(notes.map((n) => n.client_id).sort(), [ana.id, ben.id].sort());

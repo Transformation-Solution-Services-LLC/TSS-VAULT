@@ -487,7 +487,17 @@ async function bootOffline() {
   $('#view').innerHTML = '<div class="card"><h2>No signal</h2><p class="muted">Vault loads when the signal is back. Case notes saved on this phone are listed here and go out then.</p></div>';
   await pendingOn('notes', null, bootOffline);
   offline.badge();
-  window.addEventListener('online', () => { state.me = null; boot().catch(fail); }, { once: true });
+  if (!waitingForSignal) { waitingForSignal = true; window.addEventListener('online', () => { waitingForSignal = false; signalBack(2000); }, { once: true }); }
+}
+let waitingForSignal = false;
+// The browser can say it is online a moment before the server answers: keep trying, waiting longer each time.
+function signalBack(delay) {
+  state.me = null;
+  boot().catch((err) => {
+    if (!isNetworkError(err)) return fail(err);
+    bootOffline();
+    if (navigator.onLine !== false) setTimeout(() => { if (state.me?.fromDevice) signalBack(Math.min(delay * 2, 30000)); }, delay);
+  });
 }
 
 start();
