@@ -370,6 +370,23 @@ export function createApp({
     res.json(rollup({ from, to, clients: [...live, ...archived], notes, posts: [...posts, ...replies] }, asOf));
   }));
 
+  // ---- for another TSS app's server: the directory lookup at intake ----
+  // Circles looks a client up here when it opens a case, so staff pick a
+  // person already in the directory instead of typing them again. Open
+  // clients only, at most ten, and only the fields an intake form fills.
+  // Every lookup is logged with the app and the person asking, never with
+  // what was typed. Nothing is written.
+
+  const DIRECTORY_FIELDS = ['id', 'first_name', 'last_name', 'preferred_name', 'pronouns', 'date_of_birth', 'email', 'phone', 'program', 'status'];
+  app.get('/api/service/clients', requireService, wrap(async (req, res) => {
+    const q = str(req.query.q, 100);
+    if (q.length < 2) throw bad('query_too_short', 'Type at least two letters of the name');
+    const who = str(req.headers['x-tss-user'], 120) || 'a staff member';
+    const found = (await store.listClients(req.user.org_id, { q })).slice(0, 10);
+    audit(req, 'directory.lookup', `${found.length} match${found.length === 1 ? '' : 'es'}`, `by ${who}`);
+    res.json({ clients: found.map((c) => Object.fromEntries(DIRECTORY_FIELDS.map((k) => [k, c[k] ?? '']))) });
+  }));
+
   // Cockpit's "Needs you" list for one signed-in person (lib/records.js
   // needsYou): mentions, replies to their threads, their clients' check-ins.
   // Cockpit names the person in X-TSS-User (their Cockpit id, the same as a
