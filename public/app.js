@@ -5,6 +5,7 @@
 const $ = (sel, root = document) => root.querySelector(sel);
 
 import { esc, day, when, KIND, STATUS, ago, age } from './util.js';
+import { makeOffline, isNetworkError } from './offline.js';
 
 const state = { token: null, name: '', org: '', canManage: false, me: null, today: new Date().toISOString().slice(0, 10) };
 
@@ -28,10 +29,11 @@ async function api(path, opts = {}) {
     headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}) },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
-  if (r.status === 401 && !path.startsWith('/api/auth/')) { signOut(); throw new Error('Sign in again'); }
+  if (r.status === 401 && !path.startsWith('/api/auth/')) { signOut(); throw Object.assign(new Error('Sign in again'), { status: 401 }); }
   if (r.status === 204) return null;
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error || `Request failed (${r.status})`);
+  // The status rides on the error, so a refusal is never mistaken for no signal (public/offline.js).
+  if (!r.ok) throw Object.assign(new Error(j.error || `Request failed (${r.status})`), { status: r.status });
   return j;
 }
 
@@ -42,6 +44,19 @@ function signOut() {
 }
 
 const fail = (err) => alert(err.message);
+
+// Case notes written with no signal wait on this phone (public/offline.js).
+const offline = makeOffline({ esc, post: (url, body) => api(url, { method: 'POST', body }), userId: () => state.me?.id || null });
+function toast(text) {
+  const t = $('#toast'); if (!t) return;
+  t.textContent = text; t.hidden = false;
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => { t.hidden = true; }, 5000);
+}
+// A note from the form: sent now, or kept on the phone until the signal is back.
+async function saveNote(client, v) {
+  const { queued } = await offline.saveNote(client, v);
+  toast(queued ? 'No signal. The note is saved on this phone and will be sent when the signal is back.' : 'Note saved.');
+}
 
 // Downloads with the session token, then hands the browser a file.
 async function download(path, name) {
@@ -120,7 +135,7 @@ function clientForm(c = {}) {
 
 function noteForm({ client } = {}) {
   return `<form id="f" class="form"><h3>${client ? `Case note for ${esc(client.name)}` : 'New case note'}</h3>
-    ${client ? '' : '<label><span>Client</span><input name="client_search" placeholder="Type a name" autocomplete="off"><input type="hidden" name="client_id"><div id="client-hits" class="row"></div></label>'}
+    ${client ? '' : '<label><span>Client</span><input name="client_search" placeholder="Type a name" autocomplete="off"><input type="hidden" name="client_id"><input type="hidden" name="client_name"><div id="client-hits" class="row"></div></label>'}
     <div class="two"><label><span>Date</span><input name="date" type="date" value="${esc(state.today)}" max="${esc(state.today)}" required></label>
     <label><span>Kind</span><select name="kind">${options(state.me.options.note_kinds, KIND, 'progress')}</select></label></div>
     <label><span>What happened, what comes next</span><textarea name="body" rows="6" required></textarea></label>
@@ -153,9 +168,12 @@ function wireClientPicker(form) {
     form.elements.client_id.value = '';
     timer = setTimeout(async () => {
       if (input.value.trim().length < 2) { hits.innerHTML = ''; return; }
-      const { clients } = await api(`/api/clients?q=${encodeURIComponent(input.value.trim())}`);
+      const needle = input.value.trim();
+      // With no signal, the directory this page last loaded stands in.
+      let clients; try { ({ clients } = await api(`/api/clients?q=${encodeURIComponent(needle)}`)); see(clients); }
+      catch (err) { if (!isNetworkError(err)) throw err; clients = (state.seen || []).filter((c, i, all) => all.findIndex((x) => x.id === c.id) === i && c.name.toLowerCase().includes(needle.toLowerCase())); }
       hits.innerHTML = clients.slice(0, 8).map((c) => `<button type="button" class="small" data-id="${esc(c.id)}" data-name="${esc(c.name)}">${esc(c.name)}${c.program ? ` <span class="muted">${esc(c.program)}</span>` : ''}</button>`).join('') || '<span class="muted">No match.</span>';
-      hits.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { form.elements.client_id.value = b.dataset.id; input.value = b.dataset.name; hits.innerHTML = ''; }));
+      hits.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => { form.elements.client_id.value = b.dataset.id; form.elements.client_name.value = b.dataset.name; input.value = b.dataset.name; hits.innerHTML = ''; }));
     }, 200);
   });
 }
@@ -164,6 +182,16 @@ function wireRows() {
   document.querySelectorAll('tr[data-href]').forEach((tr) => tr.addEventListener('click', (e) => { if (!e.target.closest('a, button')) location.hash = tr.dataset.href; }));
 }
 
+// New case note away from a client's page; with no signal the picker uses the clients this page already loaded.
+function wireNewNote() {
+  $('#add').onclick = () => modalForm(noteForm(), (v) => {
+    if (!v.client_id) throw new Error('Pick the client from the list');
+    return saveNote({ id: v.client_id, name: v.client_name }, v);
+  }, route);
+}
+// Clients this page has loaded, for the picker with no signal. Kept in memory only, never on the device.
+function see(list) { state.seen = list.map((c) => ({ id: c.id, name: c.name || '', program: c.program || '' })).concat(state.seen || []).slice(0, 500); }
+
 // ---- routing ----
 
 function route() {
@@ -171,7 +199,25 @@ function route() {
   const [view = 'home', id] = hash.split('?')[0].split('/');
   document.querySelectorAll('.nav a').forEach((a) => a.setAttribute('aria-current', String(a.dataset.view === (view || 'home'))));
   const views = { home: showHome, board: showBoard, notes: showNotes, directory: id ? () => showClient(id) : showDirectory, import: showImport, activity: showActivity };
-  (views[view] || showHome)().catch(fail);
+  const again = () => route();
+  (views[view] || showHome)()
+    .then(() => pendingOn(view, id, again))
+    .catch(async (err) => {
+      if (!isNetworkError(err)) return fail(err);
+      // No signal: this page needs the server; what waits on the phone is still shown, and New case note still works from a client's page.
+      $('#view').innerHTML = `<div class="card no-signal"><div class="head"><div><h2>No signal</h2><p class="muted">This page loads when the signal is back. Case notes you save now wait on this phone.</p></div>
+        <div class="row"><button id="add" class="primary">New case note</button></div></div></div>`;
+      wireNewNote();
+      await pendingOn('notes', null, again);
+    });
+}
+// The notes waiting on this phone, at the top of the home page, Case Notes and a client's page.
+async function pendingOn(view, id, again) {
+  if (!['home', 'notes', 'directory'].includes(view) || (view === 'directory' && !id)) return;
+  const html = await offline.panel({ clientId: view === 'directory' ? id : null });
+  if (!html) return;
+  $('#view').insertAdjacentHTML('afterbegin', html);
+  offline.wire(again);
 }
 
 const params = () => new URLSearchParams(location.hash.split('?')[1] || '');
@@ -285,10 +331,7 @@ async function showNotes() {
     for (const [k, v] of Object.entries(formData(e.target))) if (v) out.set(k, v);
     location.hash = `#/notes${out.toString() ? `?${out}` : ''}`;
   });
-  $('#add').onclick = () => modalForm(noteForm(), (v) => {
-    if (!v.client_id) throw new Error('Pick the client from the list');
-    return api(`/api/clients/${v.client_id}/notes`, { method: 'POST', body: v });
-  }, showNotes);
+  wireNewNote();
   wireStrike(showNotes);
 }
 
@@ -301,6 +344,7 @@ async function showDirectory() {
   const filter = p.get('filter') || '';
   const archived = p.get('archived') === '1';
   const { clients, total, as_of } = await api(`/api/clients?${new URLSearchParams({ q, status, filter, archived: archived ? '1' : '' })}`);
+  see(clients);
   state.today = as_of;
   $('#view').innerHTML = `
     <div class="head"><div><h2>Directory</h2><p class="muted">${clients.length} of ${total}${archived ? ' archived' : ''} client${total === 1 ? '' : 's'}.</p></div>
@@ -331,6 +375,7 @@ async function showDirectory() {
 
 async function showClient(id) {
   const c = await api(`/api/clients/${encodeURIComponent(id)}`);
+  see([c]);
   const m = state.canManage;
   const years = age(c.date_of_birth, state.today);
   const facts = [
@@ -353,7 +398,7 @@ async function showClient(id) {
         ${c.posts.length ? `<ul class="posts">${c.posts.map((p) => postHtml(p)).join('')}</ul>` : '<p class="empty">No posts about this client.</p>'}</div>
     </div>`;
   const again = () => showClient(id);
-  $('#note').onclick = () => modalForm(noteForm({ client: c }), (v) => api(`/api/clients/${id}/notes`, { method: 'POST', body: v }), again);
+  $('#note').onclick = () => modalForm(noteForm({ client: c }), (v) => saveNote({ id, name: c.name }, v), route);
   $('#edit')?.addEventListener('click', () => modalForm(clientForm(c), (v) => api(`/api/clients/${id}`, { method: 'PATCH', body: v }), again));
   $('#archive')?.addEventListener('click', async () => {
     if (!c.archived_at && !confirm(`Archive ${c.name}? Notes stay on the record; the client leaves the directory list.`)) return;
@@ -408,20 +453,41 @@ async function boot() {
   $('#login').hidden = true;
   $('#app').hidden = false;
   state.me = await api('/api/me');
+  remember('vault.uid', state.me.id);
   state.today = state.me.today || state.today;
   $('#who').textContent = [state.name, state.org].filter(Boolean).join(' · ');
   document.querySelectorAll('[data-manage]').forEach((el) => { el.hidden = !state.canManage; });
   $('#health').textContent = state.canManage ? 'You can add and change client profiles.' : 'You can read, write case notes and post.';
   window.addEventListener('hashchange', route);
   route();
+  // What waits on this phone goes out now, and whenever the signal comes back.
+  offline.sync().then((c) => { if (c?.sent) { toast(`${c.sent} note${c.sent === 1 ? '' : 's'} sent from this phone.`); route(); } }).catch(() => {});
+  offline.badge();
+  // Installed on a phone, the app opens with no signal from its cached shell (public/sw.js).
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register(`/sw.js?v=${encodeURIComponent(state.me.release || 'dev')}`).catch(() => {});
 }
+window.addEventListener('online', () => { if (!state.me || state.me.fromDevice) return; offline.sync().then((c) => { if (c?.sent || c?.refused) { toast(`${c.sent} note${c.sent === 1 ? '' : 's'} sent from this phone${c.refused ? `, ${c.refused} refused` : ''}.`); } route(); }).catch(() => {}); });
+window.addEventListener('offline', () => { if (state.me) toast('No signal. Case notes you save now wait on this phone.'); });
 
 async function start() {
   const ticket = takeTicket();
   if (ticket) {
     try { saveSession(await api('/api/auth/cockpit', { method: 'POST', body: { ticket } })); } catch (err) { return showLogin(err.message); }
   }
-  if (state.token) boot().catch(fail); else showLogin();
+  if (state.token) boot().catch((err) => (isNetworkError(err) ? bootOffline() : fail(err))); else showLogin();
+}
+
+// Reloaded with no signal: the notes waiting on this phone and the note form from them; the rest loads when the signal is back.
+async function bootOffline() {
+  let uid = null; try { uid = sessionStorage.getItem('vault.uid'); } catch (_) { /* none */ }
+  if (!uid) return showLogin('No signal. Sign in through Cockpit when the signal is back.');
+  state.me = { id: uid, fromDevice: true };
+  $('#login').hidden = true; $('#app').hidden = false;
+  $('#who').textContent = [state.name, state.org].filter(Boolean).join(' · ');
+  $('#view').innerHTML = '<div class="card"><h2>No signal</h2><p class="muted">Vault loads when the signal is back. Case notes saved on this phone are listed here and go out then.</p></div>';
+  await pendingOn('notes', null, bootOffline);
+  offline.badge();
+  window.addEventListener('online', () => { state.me = null; boot().catch(fail); }, { once: true });
 }
 
 start();

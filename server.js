@@ -39,6 +39,8 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isId = (v) => ID.test(String(v || ''));
+// This release, for the phone's app shell cache: the deployed commit on Render, else when this process started.
+const RELEASE = (process.env.RENDER_GIT_COMMIT || '').slice(0, 12) || `start-${Date.now()}`;
 export const APP_NAME = 'Vault';
 
 export function createApp({
@@ -146,6 +148,8 @@ export function createApp({
       id: req.user.id, name: req.user.name, org: { id: req.user.org_id, name: req.user.org_name }, can_manage: req.user.can_manage,
       options: { statuses: CLIENT_STATUSES, note_kinds: NOTE_KINDS, checkin_days: CHECKIN_DAYS },
       today: clock(),
+      // Keys the app shell cache on the phone (public/sw.js): a new release drops the old one.
+      release: RELEASE,
     });
   });
 
@@ -265,11 +269,23 @@ export function createApp({
     res.json({ notes: notes.map(withName(names)).map((n) => ({ ...n, can_strike: !n.struck_at && (req.user.can_manage || mine(req, n)) })) });
   }));
 
+  // A note written on a phone with no signal (public/offline.js) comes with
+  // the id the phone gave it, so a resend after a lost answer is the same
+  // note: the author's own earlier copy answers 200 with duplicate: true,
+  // and nothing is written twice. An id already used for anything else is
+  // refused.
   app.post('/api/clients/:id/notes', requireUser, wrap(async (req, res) => {
     const c = await loadClient(req);
     const b = req.body || {};
+    const given = b.id == null || b.id === '' ? null : String(b.id);
+    if (given && !isId(given)) throw bad('bad_id', 'A note id must be a UUID');
+    if (given) {
+      const prior = await store.getNote(req.user.org_id, given);
+      if (prior && prior.created_by_id === req.user.id && prior.client_id === c.id) return res.status(200).json({ ...prior, duplicate: true });
+      if (prior) throw new PublicError(409, 'id_taken', 'That note id is already used');
+    }
     const rec = {
-      id: crypto.randomUUID(), client_id: c.id,
+      id: given || crypto.randomUUID(), client_id: c.id,
       date: dayField(b.date, 'date', { required: true }),
       kind: oneOf(b.kind, NOTE_KINDS, 'Kind', 'progress'),
       body: str(b.body, 20000),
@@ -278,7 +294,8 @@ export function createApp({
     if (!rec.body) throw bad('no_body', 'Write the note');
     if (rec.date > clock()) throw bad('future_date', 'A note cannot be dated in the future');
     const n = await store.createNote(req.user.org_id, rec);
-    audit(req, 'note.add', displayName(c), rec.kind);
+    if (n === false) throw new PublicError(409, 'id_taken', 'That note id is already used');
+    audit(req, 'note.add', displayName(c), given ? `${rec.kind}, written offline` : rec.kind);
     res.status(201).json(n);
   }));
 

@@ -66,6 +66,9 @@ for (const [name, open] of stores) {
       assert.equal(n1.date, '2026-10-01');
       assert.equal(n1.created_by_id, 'u-ray');
       assert.equal(n1.struck_at, null);
+      assert.equal(await store.createNote('org-a', { id: n1.id, client_id: ben.id, date: '2026-10-02', body: 'again' }), false, 'a note id is used once');
+      assert.equal(await store.createNote('org-b', { id: n1.id, client_id: theirs.id, date: '2026-10-02', body: 'theirs' }), false, 'not even by another organization');
+      assert.equal((await store.getNote('org-a', n1.id)).body, 'Attendance up', 'the first note stands');
 
       assert.deepEqual((await store.listNotes('org-a')).map((n) => n.body), ['Intake held', 'Attendance up'], 'newest first');
       assert.deepEqual((await store.listNotes('org-a', { client_id: ana.id })).map((n) => n.body), ['Attendance up']);
