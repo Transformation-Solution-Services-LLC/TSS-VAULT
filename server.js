@@ -421,7 +421,13 @@ export function createApp({
     const q = str(req.query.q, 100);
     if (q.length < 2) throw bad('query_too_short', 'Type at least two letters of the name');
     const who = str(req.headers['x-tss-user'], 120) || 'a staff member';
-    const found = (await store.listClients(req.user.org_id, { q })).slice(0, 10);
+    // The directory search also reads programs, tags and summaries; a lookup
+    // by name keeps only people whose name holds what was typed, so a client
+    // whose summary mentions another family's name is not offered for them.
+    const fold = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const want = fold(q);
+    const named = (c) => [c.first_name, c.last_name, c.preferred_name, `${c.first_name} ${c.last_name}`, `${c.preferred_name} ${c.last_name}`].some((n) => fold(n).includes(want));
+    const found = (await store.listClients(req.user.org_id, { q })).filter(named).slice(0, 10);
     audit(req, 'directory.lookup', `${found.length} match${found.length === 1 ? '' : 'es'}`, `by ${who}`);
     res.json({ clients: found.map((c) => Object.fromEntries(DIRECTORY_FIELDS.map((k) => [k, c[k] ?? '']))) });
   }));
