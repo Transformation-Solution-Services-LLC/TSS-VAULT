@@ -399,7 +399,7 @@ async function showActivity() {
   const LABEL = {
     'client.add': 'Added client', 'client.update': 'Changed client', 'client.archive': 'Archived client', 'client.unarchive': 'Restored client',
     'note.add': 'Wrote a case note for', 'note.strike': 'Struck a case note', 'post.add': 'Posted', 'post.reply': 'Replied to a post',
-    'post.pin': 'Pinned a post', 'post.unpin': 'Unpinned a post', 'post.remove': 'Removed a post', 'import.clients': 'Imported clients', 'export.clients': 'Exported the directory',
+    'post.pin': 'Pinned a post', 'post.unpin': 'Unpinned a post', 'post.remove': 'Removed a post', 'import.clients': 'Imported clients', 'export.clients': 'Exported the directory', 'directory.lookup': 'Looked up the directory for intake',
   };
   $('#view').innerHTML = `<h2>Activity</h2>
     <table class="list"><thead><tr><th class="keep">When</th><th class="keep">Who</th><th class="keep">What</th></tr></thead><tbody>

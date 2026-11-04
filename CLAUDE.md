@@ -29,6 +29,7 @@ DEV_SIGNIN=on npm start                     # http://localhost:8796
 - **The first screen has exactly three buttons**: Message Board, Case Notes, Directory. `test/ui.test.mjs` enforces it.
 - **Permissions:** `use` reads, writes case notes and posts; `manage` changes client profiles, imports, exports, strikes any note, pins and removes any post, reads the activity log. Cockpit grants them.
 - **Cockpit sees counts, never a name or a note.** `GET /api/cockpit/rollup` answers only what `lib/records.js` `rollup()` builds.
+- **Circles reads the directory at intake, nothing more.** `GET /api/service/clients` (service token) answers open clients, at most ten, with only the fields an intake form fills; each lookup is logged with the app and the person asking, never what was typed. No service route writes.
 - **Dates are local calendar days** (`YYYY-MM-DD`), never converted through UTC. Timestamps become days with `localDay()` in `TZ_DISPLAY`.
 - **Both stores keep the same contract.** Change one, change the other, and extend `test/store.test.mjs`.
 - **Schema changes are additive** (`CREATE ... IF NOT EXISTS`, new nullable columns). No destructive migrations on start.
