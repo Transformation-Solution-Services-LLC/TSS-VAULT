@@ -38,9 +38,12 @@ DEV_SIGNIN=on npm start                     # http://localhost:8796
 - **The error tracker gets ids, never people.** No bodies, headers, names, emails or query strings; keep `test/error-tracking.test.mjs` passing.
 - **Organization export is Cockpit's alone.** `GET /api/export/org` answers only `EXPORT_TOKEN` (never the service token other apps hold), with the organization in X-TSS-Org, and returns everything that organization has as `tss.org-export/v1`. It is logged in the activity log.
 - **CI needs no secrets.** Postgres runs as a CI service; Cockpit is a stand-in.
-- **The look is the shared TSS app shell** (Library, Sherlock, Watson, Circles, Rollodex): cream page, light side column with the brand mark upper left, system font, Cockpit's theme tokens between `/* tss-theme:start */` and `/* tss-theme:end */`.
+- **The look is the shared TSS app shell** (Library, Sherlock, Watson, Circles, Rollodex): cream page, light side column with the brand mark upper left, DM Sans served from `public/fonts` (as in Cockpit), Cockpit's theme tokens between `/* tss-theme:start */` and `/* tss-theme:end */`.
 
 ## Writing conventions
+
+- No developer text on screen: no model names, environment variable or key names, version numbers or "prototype" labels. When something is not set up, a manager sees one plain sentence; everyone else sees nothing.
+- Say it once. A heading needs no subtitle that repeats it, and the side column carries no sentence about the reader's permissions.
 
 - Never use an em dash. Use a comma, a colon, parentheses, or a second sentence.
 - Drop the word "that" wherever the sentence stays grammatical without it.

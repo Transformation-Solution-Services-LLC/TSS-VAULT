@@ -232,7 +232,7 @@ async function showHome() {
   state.today = h.as_of;
   const d = h.directory;
   $('#view').innerHTML = `
-    <div class="head"><div><h2>${esc(state.org) || 'Vault'}</h2><p class="muted">Signed in as ${esc(state.name)}.</p></div></div>
+    <div class="head"><div><h2>${esc(state.org) || 'Vault'}</h2></div></div>
     <div class="doors">
       <a class="door" href="#/board"><span class="t">Message Board</span><span class="d">Internal work messages for the team.</span>
         <span class="c">${h.board.recent.length ? `Latest: ${esc(h.board.recent[0].created_by)}, ${esc(when(h.board.recent[0].created_at))}` : 'No posts yet.'}</span></a>
@@ -425,7 +425,7 @@ async function showClient(id) {
 
 async function showImport() {
   $('#view').innerHTML = `<h2>Import clients</h2>
-    <p class="muted">Bring in the client list you keep today. Choose a CSV, match its columns, check the rows, then import. A client already in the directory is matched by email, or by name with the same date of birth or phone, and only filled in; importing the same sheet again adds nothing.</p>
+    <p class="muted">Choose a CSV of your clients, match its columns, check the rows, then import. Clients already here are matched, not added twice.</p>
     <div class="card"><div id="import-clients"></div></div>`;
   mountImporter($('#import-clients'), {
     kind: 'clients', api,
@@ -456,7 +456,6 @@ async function boot() {
   state.today = state.me.today || state.today;
   $('#who').textContent = [state.name, state.org].filter(Boolean).join(' · ');
   document.querySelectorAll('[data-manage]').forEach((el) => { el.hidden = !state.canManage; });
-  $('#health').textContent = state.canManage ? 'You can add and change client profiles.' : 'You can read, write case notes and post.';
   window.addEventListener('hashchange', route);
   route();
   // What waits on this phone goes out now, and whenever the signal comes back.
