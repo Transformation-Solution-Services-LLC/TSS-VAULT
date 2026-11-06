@@ -8,7 +8,7 @@
 const VERSION = new URL(self.location.href).searchParams.get('v') || 'dev';
 const CACHE = `tss-vault-shell-${VERSION}`;
 const SHELL = ['/', '/app.js', '/util.js', '/offline.js', '/importer.js', '/styles.css', '/tss-nav.js', '/tss-nav.css', '/manifest.webmanifest',
-  '/brand/vault.png', '/brand/tss-wordmark.webp', '/brand/tss-wordmark-light.webp', '/brand/wally.webp', '/icons/icon-192.png', '/icons/apple-touch-icon.png'];
+  '/brand/vault.png', '/brand/tss-wordmark.webp', '/brand/tss-wordmark-light.webp', '/brand/wally.webp', '/brand/wally-vault.svg', '/brand/wally-vault-still.svg', '/brand/splash.js', '/icons/icon-192.png', '/icons/apple-touch-icon.png'];
 
 function shouldCache(url) {
   let u; try { u = new URL(url, self.location.origin); } catch { return false; }
