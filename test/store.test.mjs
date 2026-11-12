@@ -51,6 +51,13 @@ for (const [name, open] of stores) {
       assert.equal((await store.listClients('org-a')).length, 1);
       assert.equal((await store.listClients('org-a', { archived: true })).length, 1);
       assert.equal((await store.updateClient('org-a', ana.id, { archived_at: null })).archived_at, null);
+
+      // The id a client had in the system they were imported from.
+      assert.equal(ana.external_id, null);
+      const cy = await store.createClient('org-a', { id: id(), first_name: 'Cy', external_id: 'R-7' });
+      assert.equal(cy.external_id, 'R-7');
+      assert.equal((await store.updateClient('org-a', ana.id, { external_id: 'R-1' })).external_id, 'R-1');
+      assert.equal((await store.getClient('org-a', ana.id)).external_id, 'R-1');
     } finally { await store.close(); }
   });
 
@@ -69,12 +76,18 @@ for (const [name, open] of stores) {
       assert.equal(await store.createNote('org-a', { id: n1.id, client_id: ben.id, date: '2026-10-02', body: 'again' }), false, 'a note id is used once');
       assert.equal(await store.createNote('org-b', { id: n1.id, client_id: theirs.id, date: '2026-10-02', body: 'theirs' }), false, 'not even by another organization');
       assert.equal((await store.getNote('org-a', n1.id)).body, 'Attendance up', 'the first note stands');
+      assert.equal(n1.imported_from, null);
+      const imported = await store.createNote('org-a', { id: id(), client_id: ben.id, date: '2025-01-02', kind: 'activity', body: 'Old note', created_by: 'Dana', created_by_id: 'u-mgr', imported_from: 'Regroup' });
+      assert.equal(imported.imported_from, 'Regroup');
+      assert.equal(imported.kind, 'activity');
+      assert.equal((await store.getNote('org-a', imported.id)).imported_from, 'Regroup');
 
-      assert.deepEqual((await store.listNotes('org-a')).map((n) => n.body), ['Intake held', 'Attendance up'], 'newest first');
+      assert.deepEqual((await store.listNotes('org-a')).map((n) => n.body), ['Intake held', 'Attendance up', 'Old note'], 'newest first');
       assert.deepEqual((await store.listNotes('org-a', { client_id: ana.id })).map((n) => n.body), ['Attendance up']);
       assert.deepEqual((await store.listNotes('org-a', { kind: 'event' })).map((n) => n.body), ['Intake held']);
       assert.deepEqual((await store.listNotes('org-a', { q: 'ATTEND' })).map((n) => n.body), ['Attendance up']);
       assert.deepEqual((await store.listNotes('org-a', { from: '2026-10-02', to: '2026-10-31' })).map((n) => n.body), ['Intake held']);
+      assert.deepEqual((await store.listNotes('org-a', { kind: 'activity' })).map((n) => n.body), ['Old note']);
       assert.equal((await store.listNotes('org-a', { limit: 1 })).length, 1);
       assert.deepEqual(await store.listNotes('org-b'), []);
       assert.equal(await store.getNote('org-b', n1.id), null);
@@ -86,7 +99,7 @@ for (const [name, open] of stores) {
       assert.equal(typeof struck.struck_at, 'string');
       const twice = await store.strikeNote('org-a', n1.id, { by: 'Kim', reason: 'again' });
       assert.equal(twice.struck_by, 'Dana', 'the first strike stands');
-      assert.equal((await store.listNotes('org-a')).length, 2, 'struck notes stay');
+      assert.equal((await store.listNotes('org-a')).length, 3, 'struck notes stay');
     } finally { await store.close(); }
   });
 

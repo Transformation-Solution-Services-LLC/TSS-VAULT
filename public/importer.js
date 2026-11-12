@@ -7,19 +7,34 @@ import { esc } from './util.js';
 
 const ACTION = { add: ['New', 'good'], update: ['Update', 'accent'], same: ['Already there', ''], skip: ['Skipped', 'bad'] };
 
-// root: an element. kind: "contacts" or "gifts" (the route). api(path, opts).
-// summary(result): one line, e.g. "3 added, 1 updated".
-export function mountImporter(root, { kind, api, summary, after }) {
-  let st = { text: '', name: '', preview: null, mapping: {}, checked: null };
+// A file that is not CSV (Excel, JSON, tab-separated) is read by the server
+// into CSV text first; a workbook with several sheets offers them, and the
+// sheet whose name fits this import is chosen first.
+const CSV_NAME = /\.csv$/i;
+const ACCEPT = '.csv,.xlsx,.xlsm,.json,.tsv,.txt,text/csv,text/plain,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const toBase64 = (buf) => {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+};
+
+// root: an element. kind: the route under /api/import/. api(path, opts).
+// summary(result): one line, e.g. "3 added, 1 updated". sheetHint: a pattern
+// for the sheet name to choose first. extra: sent with each check and import.
+export function mountImporter(root, { kind, api, summary, after, sheetHint = null, extra = {} }) {
+  let st = { text: '', name: '', preview: null, mapping: {}, checked: null, sheets: [], sheet: '', file: null };
 
   function draw() {
     const p = st.preview;
     root.innerHTML = `
-      <p><label class="file-pick">Choose a CSV file <input type="file" accept=".csv,text/csv,text/plain" data-file></label>
-      ${st.name ? `<span class="muted">${esc(st.name)}, ${p ? `${p.rows} row${p.rows === 1 ? '' : 's'}` : 'reading…'}</span>` : '<span class="muted">Save the sheet as CSV first (File, Download, CSV in Google Sheets or Excel).</span>'}</p>
+      <p><label class="file-pick">Choose a file <input type="file" accept="${ACCEPT}" data-file></label>
+      ${st.name ? `<span class="muted">${esc(st.name)}, ${p ? `${p.rows} row${p.rows === 1 ? '' : 's'}` : 'reading…'}</span>` : '<span class="muted">CSV, Excel (.xlsx) or JSON.</span>'}</p>
+      ${st.sheets.length > 1 ? `<p><label>Sheet <select data-sheet>${st.sheets.map((n) => `<option ${n === st.sheet ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></label></p>` : ''}
       ${p ? mappingView(p) : ''}
       <div data-result aria-live="polite">${st.checked ? resultView(st.checked) : ''}</div>`;
     root.querySelector('[data-file]').addEventListener('change', pick);
+    root.querySelector('[data-sheet]')?.addEventListener('change', (e) => load(e.target.value));
     root.querySelectorAll('select[data-field]').forEach((s) => s.addEventListener('change', () => {
       const v = s.value;
       if (v === '') delete st.mapping[s.dataset.field]; else st.mapping[s.dataset.field] = Number(v);
@@ -41,6 +56,7 @@ export function mountImporter(root, { kind, api, summary, after }) {
     }).join('');
     const unused = p.headers.filter((_, i) => !Object.values(st.mapping).includes(i));
     const missing = p.fields.filter((f) => f.required && st.mapping[f.id] === undefined);
+    for (const g of p.need_one || []) if (!g.ids.some((id) => st.mapping[id] !== undefined)) missing.push({ label: g.label });
     return `<table class="list import-map"><thead><tr><th>Field</th><th>Column in your sheet</th><th>Sample values</th></tr></thead><tbody>${rows}</tbody></table>
       ${unused.length ? `<p class="muted">Not imported: ${unused.map(esc).join(', ')}</p>` : ''}
       <p class="import-actions"><button type="button" class="primary" data-check ${missing.length ? 'disabled' : ''}>Check the rows</button>
@@ -61,16 +77,37 @@ export function mountImporter(root, { kind, api, summary, after }) {
   async function pick(e) {
     const file = e.target.files[0];
     if (!file) return;
-    st = { text: await file.text(), name: file.name, preview: null, mapping: {}, checked: null };
+    st = { text: '', name: file.name, preview: null, mapping: {}, checked: null, sheets: [], sheet: '', file: null };
     draw();
     try {
+      if (CSV_NAME.test(file.name)) st.text = await file.text();
+      else st.file = { name: file.name, data: toBase64(await file.arrayBuffer()) };
+    } catch (_) {
+      return fail('The file could not be read.');
+    }
+    await load('');
+  }
+
+  function fail(message) {
+    st.name = '';
+    draw();
+    root.querySelector('[data-result]').innerHTML = `<p class="error">${esc(message)}</p>`;
+  }
+
+  async function load(sheet) {
+    st.preview = null; st.checked = null;
+    draw();
+    try {
+      if (st.file) {
+        let r = await api('/api/import/read', { method: 'POST', body: { ...st.file, sheet } });
+        const fit = !sheet && sheetHint && r.sheets.find((n) => sheetHint.test(n));
+        if (fit && fit !== r.sheet) r = await api('/api/import/read', { method: 'POST', body: { ...st.file, sheet: fit } });
+        st.text = r.csv; st.sheets = r.sheets; st.sheet = r.sheet;
+      }
       st.preview = await api(`/api/import/${kind}/preview`, { method: 'POST', body: { csv: st.text } });
       st.mapping = { ...st.preview.mapping };
     } catch (err) {
-      st.name = '';
-      draw();
-      root.querySelector('[data-result]').innerHTML = `<p class="error">${esc(err.message)}</p>`;
-      return;
+      return fail(err.message);
     }
     draw();
   }
@@ -80,9 +117,9 @@ export function mountImporter(root, { kind, api, summary, after }) {
     status.textContent = dry ? 'Checking…' : 'Importing…';
     root.querySelectorAll('button').forEach((b) => { b.disabled = true; });
     try {
-      st.checked = await api(`/api/import/${kind}`, { method: 'POST', body: { csv: st.text, mapping: st.mapping, dry_run: dry } });
+      st.checked = await api(`/api/import/${kind}`, { method: 'POST', body: { ...extra, csv: st.text, mapping: st.mapping, dry_run: dry } });
       draw();
-      if (!dry) { st.preview = null; st.name = ''; const done = st.checked; st.checked = null; draw(); root.querySelector('[data-result]').innerHTML = resultView(done); after?.(done); }
+      if (!dry) { st.preview = null; st.name = ''; st.sheets = []; st.file = null; const done = st.checked; st.checked = null; draw(); root.querySelector('[data-result]').innerHTML = resultView(done); after?.(done); }
     } catch (err) {
       draw();
       root.querySelector('[data-status]').textContent = err.message;

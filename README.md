@@ -52,6 +52,26 @@ same date of birth or phone, then by name alone when nothing on file tells
 the two apart; a match is only filled in. Importing the same sheet twice
 changes nothing the second time.
 
+### Moving from Regroup
+
+Import has three tabs: Directory, Progress notes and Activity notes. Each
+takes the file Regroup (or any other system) exports: CSV, Excel (.xlsx, a
+workbook's sheets are offered by name) or JSON. Import the directory first
+and keep its ID column matched (`external_id`, the client's id in the old
+system). A note then finds its client by that ID, then email, then name with
+the date of birth, then a name only one client has; a row naming no one, or
+two people, is skipped with the reason. A note keeps its date, its author's
+name, its title, type and duration (in the note), and is marked "imported
+from Regroup". Activity notes are their own kind, Activity; a type such as
+Phone call, Meeting or Incident sets the kind. A note's id is made from the
+client and the note (Regroup's note id, or its date and text), so the same
+file twice adds nothing. An imported note is a case note like any other:
+never edited, struck if wrong.
+
+API: `POST /api/import/read {name, data (base64), sheet?}` answers `{sheets,
+sheet, csv}`; `POST /api/import/progress-notes` and `/api/import/activity-notes`
+(and their `/preview`) work like the clients import below.
+
 API: `POST /api/import/clients/preview {csv}` answers the columns, samples,
 fields and guessed mapping; `POST /api/import/clients {csv, mapping,
 dry_run}` checks or imports (`mapping` is `{ field_id: column_index }`).

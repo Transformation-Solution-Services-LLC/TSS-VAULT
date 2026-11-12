@@ -33,6 +33,7 @@ import { publicErrorBody, logSafeError, normalizePublicError, requestContext, Pu
 import { errorReporter, installCrashHandlers } from './lib/error-tracking.js';
 import { openStore } from './lib/store.js';
 import { toCsv } from './lib/csv.js';
+import { readTableFile } from './lib/sheet-file.js';
 import { readSheet, cleanMapping, mappedRows, previewOf, nameKey, phoneKey, readDay, MAX_ROWS } from './lib/import-map.js';
 import {
   CLIENT_STATUSES, NOTE_KINDS, CHECKIN_DAYS,
@@ -126,6 +127,7 @@ export function createApp({
     if (!existing || has('emergency_contact')) out.emergency_contact = str(b.emergency_contact, 500);
     if (!existing || has('tags')) out.tags = tagsField(b.tags);
     if (!existing || has('summary')) out.summary = str(b.summary, 5000);
+    if (has('external_id')) out.external_id = str(b.external_id, 120) || null;
     const merged = { ...(existing || {}), ...out };
     if (!merged.first_name && !merged.last_name && !merged.preferred_name) throw bad('no_name', 'Give the client a first or last name');
     return out;
@@ -486,6 +488,7 @@ export function createApp({
     { id: 'emergency_contact', label: 'Emergency contact', aliases: ['emergency', 'emergency_contact_name', 'guardian', 'parent_guardian'] },
     { id: 'tags', label: 'Tags', aliases: ['tag', 'groups', 'labels'] },
     { id: 'summary', label: 'Summary', aliases: ['notes', 'note', 'comments', 'description', 'background'] },
+    { id: 'external_id', label: 'ID in the old system', hint: 'Lets imported notes find this client', aliases: ['id', 'client_id', 'participant_id', 'member_id', 'person_id', 'contact_id', 'record_id', 'regroup_id', 'client_number', 'case_number', 'case_id'] },
   ];
   const STATUS_WORDS = { open: 'active', current: 'active', enrolled: 'active', waiting: 'waitlist', wait_list: 'waitlist', waitlisted: 'waitlist', pending: 'waitlist', closed: 'inactive', discharged: 'inactive', exited: 'inactive', former: 'inactive' };
   const splitName = (full) => {
@@ -511,8 +514,9 @@ export function createApp({
     const rows = mappedRows(sheet, cleanMapping(b.mapping, sheet.headers, CLIENT_FIELDS));
     const org = req.user.org_id;
     const existing = [...(await store.listClients(org)), ...(await store.listClients(org, { archived: true }))];
-    const byEmail = new Map(); const byName = new Map();
+    const byEmail = new Map(); const byName = new Map(); const byRef = new Map();
     const remember = (c) => {
+      if (c.external_id) byRef.set(c.external_id, c);
       if (c.email) byEmail.set(c.email.toLowerCase(), c);
       const k = nameKey(c.first_name, c.last_name);
       if (k) byName.set(k, [...(byName.get(k) || []), c]);
@@ -520,6 +524,7 @@ export function createApp({
     existing.forEach(remember);
     const differ = (a, b) => Boolean(a && b && a !== b);
     const find = (g) => {
+      if (g.external_id && byRef.has(g.external_id)) return byRef.get(g.external_id);
       if (g.email && byEmail.has(g.email)) return byEmail.get(g.email);
       const same = byName.get(nameKey(g.first_name || '', g.last_name || '')) || [];
       // Same name, and nothing on file says it is someone else.
@@ -538,7 +543,7 @@ export function createApp({
           first_name: r.first_name || first, last_name: r.last_name || last, preferred_name: r.preferred_name,
           pronouns: r.pronouns, date_of_birth: readDay(r.date_of_birth), email: (r.email || '').toLowerCase(), phone: r.phone, address: r.address,
           program: r.program, status: STATUS_WORDS[status] || status || undefined, assigned_to: r.assigned_to,
-          intake_on: readDay(r.intake_on), emergency_contact: r.emergency_contact, tags: r.tags, summary: r.summary,
+          intake_on: readDay(r.intake_on), emergency_contact: r.emergency_contact, tags: r.tags, summary: r.summary, external_id: r.external_id,
         }).filter(([, v]) => v !== undefined && v !== ''));
         const match = find(given);
         if (match) {
@@ -565,6 +570,129 @@ export function createApp({
     if (!dry) audit(req, 'import.clients', `${result.added} added, ${result.updated} updated`, [result.unchanged && `${result.unchanged} already there`, result.skipped.length && `${result.skipped.length} skipped`].filter(Boolean).join(', '));
     res.json(result);
   }));
+
+  // A file exported from another system (Excel, JSON, tab-separated) read as
+  // CSV text for the steps above. The type comes from the file's name. Nothing
+  // is kept: the text goes back to the page, which sends it with each step.
+  app.post('/api/import/read', requireManager, wrap(async (req, res) => {
+    const b = req.body || {};
+    const name = str(b.name, 200);
+    const data = String(b.data || '');
+    if (!data) throw bad('empty_file', 'The file is empty');
+    res.json(readTableFile({ name, data, sheet: str(b.sheet, 200) }));
+  }));
+
+  // Progress notes and activity notes from another system (Regroup's export,
+  // or any sheet with one note a row). Each note is matched to a client
+  // already in the directory: the old system's client id, then email, then
+  // name with the date of birth, then a name only one client has. A note
+  // keeps its date and its author's name, is marked as imported, and is a
+  // case note like any other: never edited, struck if wrong. Its id comes
+  // from the client and the note itself (the old system's note id, or its
+  // date and text), so the same file imported twice adds nothing.
+  const NOTE_IMPORT_FIELDS = [
+    { id: 'client_ref', label: 'Client ID in the old system', hint: 'The same ID as in the directory you imported', aliases: ['client_id', 'participant_id', 'member_id', 'person_id', 'contact_id', 'regroup_id', 'regroup_client_id', 'client_number', 'case_number', 'case_id', 'client_ref'] },
+    { id: 'client_name', label: 'Client name', aliases: ['client', 'client_name', 'name', 'full_name', 'participant', 'participant_name', 'member', 'member_name', 'person', 'person_name', 'youth', 'youth_name', 'contact', 'contact_name'] },
+    { id: 'first_name', label: 'Client first name', aliases: ['client_first_name', 'first', 'firstname', 'participant_first_name'] },
+    { id: 'last_name', label: 'Client last name', aliases: ['client_last_name', 'last', 'lastname', 'surname', 'participant_last_name'] },
+    { id: 'email', label: 'Client email', aliases: ['client_email', 'email_address', 'participant_email'] },
+    { id: 'date_of_birth', label: 'Client date of birth', aliases: ['dob', 'birthdate', 'birth_date', 'client_dob'] },
+    { id: 'date', label: 'Date', required: true, aliases: ['note_date', 'activity_date', 'session_date', 'service_date', 'contact_date', 'entry_date', 'date_of_service', 'created', 'created_at', 'date_created', 'created_on', 'timestamp', 'when', 'start', 'start_date', 'start_time'] },
+    { id: 'body', label: 'Note', required: true, aliases: ['notes', 'note', 'note_text', 'progress_note', 'progress_notes', 'activity_note', 'activity_notes', 'text', 'content', 'details', 'description', 'comments', 'comment', 'narrative', 'summary', 'entry', 'message'] },
+    { id: 'title', label: 'Title', aliases: ['subject', 'topic', 'heading', 'activity', 'activity_name'] },
+    { id: 'type', label: 'Type', hint: 'Kept in the note; a call, meeting, event or incident also sets the kind', aliases: ['note_type', 'activity_type', 'category', 'kind', 'service_type', 'contact_type', 'service'] },
+    { id: 'duration', label: 'Duration', aliases: ['minutes', 'hours', 'time_spent', 'length', 'units'] },
+    { id: 'author', label: 'Written by', aliases: ['author', 'staff', 'staff_name', 'staff_member', 'written_by', 'created_by', 'entered_by', 'worker', 'case_worker', 'case_manager', 'counselor', 'advocate', 'user', 'user_name', 'provider', 'facilitator'] },
+    { id: 'note_ref', label: 'Note ID in the old system', aliases: ['id', 'note_id', 'activity_id', 'entry_id', 'record_id', 'progress_note_id', 'activity_note_id'] },
+  ];
+  const CLIENT_KEYS = ['client_ref', 'client_name', 'first_name', 'last_name', 'email'];
+  const TYPE_WORDS = { call: 'contact', phone: 'contact', phone_call: 'contact', email: 'contact', text: 'contact', meeting: 'contact', visit: 'contact', home_visit: 'contact', check_in: 'contact', session: 'progress', progress_note: 'progress', activity: 'activity' };
+  // A UUID from text, so the same note always has the same id.
+  const stableId = (text) => {
+    const h = crypto.createHash('sha256').update(text).digest('hex');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${((parseInt(h[16], 16) & 3) | 8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+  };
+
+  for (const [route, defaultKind, label] of [['progress-notes', 'progress', 'progress notes'], ['activity-notes', 'activity', 'activity notes']]) {
+    app.post(`/api/import/${route}/preview`, requireManager, wrap(async (req, res) => {
+      const sheet = readSheet(str((req.body || {}).csv, 6_000_000));
+      if (!sheet.headers.length) throw bad('empty_csv', 'The file is empty');
+      res.json({ ...previewOf(sheet, NOTE_IMPORT_FIELDS), need_one: [{ ids: CLIENT_KEYS, label: 'the client (ID, name or email)' }] });
+    }));
+
+    app.post(`/api/import/${route}`, requireManager, wrap(async (req, res) => {
+      const b = req.body || {};
+      const dry = Boolean(b.dry_run);
+      const source = str(b.source, 60) || 'Regroup';
+      const sheet = readSheet(str(b.csv, 6_000_000));
+      if (!sheet.rows.length) throw bad('empty_csv', 'The file has no rows under its header');
+      if (sheet.rows.length > MAX_ROWS) throw bad('too_many_rows', `Import at most ${MAX_ROWS.toLocaleString('en-US')} rows at a time`);
+      const mapping = cleanMapping(b.mapping, sheet.headers, NOTE_IMPORT_FIELDS);
+      if (mapping.date === undefined || mapping.body === undefined) throw bad('mapping_needed', 'Choose the columns for the date and the note');
+      if (!CLIENT_KEYS.some((k) => mapping[k] !== undefined)) throw bad('mapping_needed', 'Choose a column that names the client');
+      const rows = mappedRows(sheet, mapping);
+      const org = req.user.org_id;
+      const clients = [...(await store.listClients(org)), ...(await store.listClients(org, { archived: true }))];
+      const byRef = new Map(); const byEmail = new Map(); const byName = new Map();
+      for (const c of clients) {
+        if (c.external_id) byRef.set(c.external_id, c);
+        if (c.email) byEmail.set(c.email.toLowerCase(), c);
+        for (const k of new Set([nameKey(c.first_name, c.last_name), c.preferred_name && nameKey(c.preferred_name, c.last_name)].filter(Boolean))) byName.set(k, [...(byName.get(k) || []), c]);
+      }
+      const findClient = (r) => {
+        const ref = str(r.client_ref, 120);
+        if (ref && byRef.has(ref)) return { c: byRef.get(ref) };
+        const email = str(r.email, 200).toLowerCase();
+        if (email && byEmail.has(email)) return { c: byEmail.get(email) };
+        let [first, last] = [str(r.first_name, 120), str(r.last_name, 120)];
+        if (!first && !last && r.client_name) [first, last] = splitName(r.client_name);
+        const key = nameKey(first, last);
+        if (!key && !ref && !email) return { why: 'No client named on this row' };
+        const same = byName.get(key) || [];
+        const dob = readDay(r.date_of_birth);
+        const fits = dob ? same.filter((c) => !c.date_of_birth || c.date_of_birth === dob) : same;
+        const strong = dob ? fits.filter((c) => c.date_of_birth === dob) : [];
+        if (strong.length === 1) return { c: strong[0] };
+        if (fits.length === 1) return { c: fits[0] };
+        if (fits.length > 1) return { why: `${fits.length} clients are named ${[first, last].filter(Boolean).join(' ')}; add the client ID or date of birth` };
+        return { why: `No client in the directory matches ${[first, last].filter(Boolean).join(' ') || ref || email}; import the directory first` };
+      };
+      const result = { dry_run: dry, added: 0, updated: 0, unchanged: 0, skipped: [], plan: [] };
+      const plan = (p) => { if (result.plan.length < 200) result.plan.push(p); };
+      const seen = new Set();
+      const today = clock();
+      for (const [i, r] of rows.entries()) {
+        const line = i + 2;
+        const skip = (reason) => { result.skipped.push({ line, reason }); plan({ line, action: 'skip', reason }); };
+        const text = str(r.body, 20000);
+        if (!text) { skip('No note text'); continue; }
+        const date = readDay(r.date);
+        if (!date) { skip('No date'); continue; }
+        if (!isDay(date)) { skip(`The date "${str(r.date, 40)}" could not be read`); continue; }
+        if (date > today) { skip('Dated in the future'); continue; }
+        const { c, why } = findClient(r);
+        if (!c) { skip(why); continue; }
+        const type = str(r.type, 80);
+        const typeKey = type.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        const kind = NOTE_KINDS.includes(typeKey) ? typeKey : TYPE_WORDS[typeKey] || defaultKind;
+        const kept = type && !NOTE_KINDS.includes(typeKey) ? type : '';
+        const body = [str(r.title, 300), kept && `Type: ${kept}`, str(r.duration, 40) && `Duration: ${str(r.duration, 40)}`, text].filter(Boolean).join('\n').slice(0, 20000);
+        const ref = str(r.note_ref, 120);
+        const id = stableId(`vault-import|${org}|${c.id}|${ref ? `ref:${ref}` : `${date}|${defaultKind}|${text.replace(/\s+/g, ' ')}`}`);
+        const who = displayName(c);
+        if (seen.has(id) || (await store.getNote(org, id))) { result.unchanged++; plan({ line, action: 'same', name: who, detail: date }); continue; }
+        seen.add(id);
+        if (!dry) {
+          const n = await store.createNote(org, { id, client_id: c.id, date, kind, body, created_by: str(r.author, 120) || req.user.name, created_by_id: req.user.id, imported_from: source });
+          if (!n) { skip('Could not save this note'); continue; }
+        }
+        result.added++;
+        plan({ line, action: 'add', name: who, detail: `${date}, ${kind}` });
+      }
+      if (!dry) audit(req, 'import.notes', `${result.added} ${label}`, [`from ${source}`, result.unchanged && `${result.unchanged} already there`, result.skipped.length && `${result.skipped.length} skipped`].filter(Boolean).join(', '));
+      res.json(result);
+    }));
+  }
 
   app.get('/api/activity', requireManager, wrap(async (req, res) => {
     res.json({ activity: await store.activity(req.user.org_id, Math.min(Number(req.query.limit) || 100, 500)) });
