@@ -2,7 +2,7 @@
 
 Cockpit (the TSS-Dashboard repository, assembled with every app in
 TSS-FullStack) is the one sign-in for TSS apps. With `COCKPIT_URL` set,
-Vault trusts it the same way Library, Sherlock, Watson and Circles do.
+Vault trusts it the same way Library, Sherlock and Watson do.
 Code: `lib/cockpit.js` and `lib/auth.js`; tests: `test/server.test.mjs`.
 
 ## Signing in
@@ -41,24 +41,14 @@ new clients (by intake date), message-board posts; and now: active clients
 and active clients due for a check-in. By month: case notes, new clients,
 posts. Never a name, a note, a post or anything about one person.
 
-## What Circles reads
-
-`GET /api/service/clients?q=<name>`, with the same token and `X-TSS-Org`,
-plus `X-TSS-App` (the app) and `X-TSS-User` (the person asking). Circles
-calls it from its intake form so staff pick a person already in the
-directory. It answers open clients only, at most ten, with the fields an
-intake form fills: name, preferred name, pronouns, date of birth, phone,
-email, program, status. Never the summary, address, emergency contact, a
-note or a post. Each lookup goes in the activity log with the app and the
-person asking, never with what was typed. The service token opens nothing
-else, and nothing it opens writes.
+The service token opens no client record, and nothing it opens writes.
 
 ## Settings
 
 | Variable | What |
 |---|---|
 | `COCKPIT_URL` | Cockpit's public address, e.g. `https://tss-cockpit.onrender.com`. Turns on Cockpit sign-in |
-| `VAULT_SERVICE_TOKEN` | Shared with Cockpit (the counts) and Circles (the intake lookup). Blank turns both off |
+| `VAULT_SERVICE_TOKEN` | Shared with Cockpit (the counts). Blank turns them off |
 | `TRUST_PROXY` | `1` on Render |
 
 TSS-FullStack's `render.yaml` sets all of these for the hosted service.

@@ -372,41 +372,26 @@ test('import: preview guesses columns, a dry run writes nothing, and the same sh
   } finally { t.close(); }
 });
 
-test('Circles looks a client up for intake with the service token: open clients, intake fields, logged', async () => {
+test('the service token hands out no client: the intake lookup is gone, and a lookup from before stays in the activity log', async () => {
   const t = await setup();
   try {
-    const svc = { Authorization: 'Bearer vault-svc', 'X-TSS-Org': 'org-a', 'X-TSS-App': 'circles', 'X-TSS-User': 'Dana Reyes' };
-    await t.ok('POST', '/api/clients', { first_name: 'Ana', last_name: 'Reyes', date_of_birth: '2010-05-04', phone: '541 555 0100', email: 'ana@example.org', program: 'Youth', emergency_contact: 'Mom 555', summary: 'Private summary', address: '1 Main St' });
-    const old = await t.ok('POST', '/api/clients', { first_name: 'Anabel', last_name: 'Gone' });
-    await t.ok('POST', `/api/clients/${old.id}/archive`, {}, t.manager, 200);
-    await t.ok('POST', '/api/clients', { first_name: 'Ana', last_name: 'Elsewhere' }, t.other);
+    const svc = { Authorization: 'Bearer vault-svc', 'X-TSS-Org': 'org-a', 'X-TSS-App': 'cockpit', 'X-TSS-User': 'Dana Reyes' };
+    await t.ok('POST', '/api/clients', { first_name: 'Ana', last_name: 'Reyes', date_of_birth: '2010-05-04', phone: '541 555 0100', email: 'ana@example.org', program: 'Youth' });
+    // What another app's lookup left in the log while the route existed.
+    await t.store.log('org-a', { actor: 'circles', action: 'directory.lookup', target: '1 match', detail: 'by Dana Reyes' });
 
-    assert.equal((await t.call('GET', '/api/service/clients?q=ana')).status, 401);
-    assert.equal((await t.call('GET', '/api/service/clients?q=ana', null, t.manager)).status, 401, 'a session is not the service token');
-    assert.equal((await t.call('GET', '/api/service/clients?q=a', null, null, svc)).status, 400, 'two letters at least');
-
-    const r = await t.call('GET', '/api/service/clients?q=ana', null, null, svc);
-    assert.equal(r.status, 200);
-    assert.equal(r.body.clients.length, 1, 'archived and other organizations left out');
-    const [c] = r.body.clients;
-    assert.equal(c.first_name, 'Ana'); assert.equal(c.last_name, 'Reyes'); assert.equal(c.date_of_birth, '2010-05-04'); assert.equal(c.phone, '541 555 0100');
-    assert.doesNotMatch(r.text, /Private summary|Mom 555|Main St/, 'only the fields intake fills');
-
-    // A client whose summary or program mentions the name is not a match for it.
-    await t.ok('POST', '/api/clients', { first_name: 'Riley', last_name: 'Carter', summary: 'Harmed party in the Reyes case.', program: 'Youth' });
-    const byLast = await t.call('GET', '/api/service/clients?q=reyes', null, null, svc);
-    assert.deepEqual(byLast.body.clients.map((x) => x.first_name), ['Ana'], 'matched by name, not by summary');
-    const byFull = await t.call('GET', '/api/service/clients?q=Ana%20Reyes', null, null, svc);
-    assert.equal(byFull.body.clients.length, 1, 'first and last name together');
-    assert.equal((await t.call('GET', '/api/service/clients?q=youth', null, null, svc)).body.clients.length, 0, 'a program is not a name');
+    for (const p of ['/api/service/clients?q=ana', '/api/service/clients?q=Ana%20Reyes', '/api/service/clients']) {
+      const r = await t.call('GET', p, null, null, svc);
+      assert.equal(r.status, 404, p);
+      assert.doesNotMatch(r.text, /Reyes|2010-05-04|541 555|ana@example/, 'no client in the answer');
+    }
+    // The token still reads the counts, and still writes nothing.
+    assert.equal((await t.call('GET', '/api/cockpit/rollup?from=2026-01-01&to=2026-03-31', null, null, svc)).status, 200);
+    assert.equal((await t.call('POST', '/api/clients', { first_name: 'X' }, null, svc)).status, 401);
 
     const log = (await t.ok('GET', '/api/activity')).activity;
-    const hit = log.find((e) => e.action === 'directory.lookup');
-    assert.ok(hit, 'the lookup is logged');
-    assert.equal(hit.actor, 'circles');
-    assert.match(hit.detail, /Dana Reyes/);
-    assert.doesNotMatch(`${hit.target} ${hit.detail.replace('Dana Reyes', '')}`, /ana/i, 'what was typed is not logged');
-    // Writing stays closed to the service token.
-    assert.equal((await t.call('POST', '/api/clients', { first_name: 'X' }, null, svc)).status, 401);
+    const kept = log.filter((e) => e.action === 'directory.lookup');
+    assert.equal(kept.length, 1, 'the record of the past lookup is kept, and no new one is written');
+    assert.equal(kept[0].actor, 'circles');
   } finally { t.close(); }
 });

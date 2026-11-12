@@ -16,9 +16,6 @@ buttons:
   client's notes and the posts about them. Active clients with no note in 30
   days are flagged for a check-in.
 
-Vault holds general staff and client records. Circles owns the specialized
-restorative justice workflow.
-
 Staff sign in through Cockpit only (`docs/cockpit.md`). Cockpit's `use`
 permission lets a person read, write case notes and post; `manage` adds and
 changes client profiles, imports and exports the directory, strikes any note,
