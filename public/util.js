@@ -5,7 +5,7 @@ export function esc(s) {
 }
 export const day = (d) => (d ? new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '');
 export const when = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
-export const KIND = { progress: 'Progress', contact: 'Contact', event: 'Event', incident: 'Incident', other: 'Other' };
+export const KIND = { progress: 'Progress', activity: 'Activity', contact: 'Contact', event: 'Event', incident: 'Incident', other: 'Other' };
 export const STATUS = { active: 'Active', waitlist: 'Waitlist', inactive: 'Inactive' };
 
 // Days since a date, in words.

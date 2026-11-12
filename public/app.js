@@ -307,7 +307,7 @@ async function showBoard() {
 
 function noteItem(n, { withClient = true } = {}) {
   return `<li class="${n.struck_at ? 'struck' : ''}"><span class="when">${esc(day(n.date))}<br><span class="badge">${esc(KIND[n.kind] || n.kind)}</span></span>
-    <span class="what">${withClient ? `<a href="#/directory/${esc(n.client_id)}">${esc(n.client_name)}</a><br>` : ''}${esc(n.body)}<br><span class="muted">${esc(n.created_by)}, ${esc(when(n.created_at))}</span>
+    <span class="what">${withClient ? `<a href="#/directory/${esc(n.client_id)}">${esc(n.client_name)}</a><br>` : ''}${esc(n.body)}<br><span class="muted">${esc(n.created_by)}, ${n.imported_from ? `imported from ${esc(n.imported_from)}` : esc(when(n.created_at))}</span>
     ${n.struck_at ? `<br><span class="badge bad">Struck by ${esc(n.struck_by)}: ${esc(n.strike_reason)}</span>` : ''}</span>
     ${n.can_strike ? `<button class="small" data-strike="${esc(n.id)}">Strike</button>` : ''}</li>`;
 }
@@ -429,13 +429,25 @@ async function showClient(id) {
 // ---- import and activity (managers) ----
 
 async function showImport() {
-  $('#view').innerHTML = `<h2>Import clients</h2>
-    <p class="muted">Choose a CSV of your clients, match its columns, check the rows, then import. Clients already here are matched, not added twice.</p>
-    <div class="card"><div id="import-clients"></div></div>`;
-  mountImporter($('#import-clients'), {
-    kind: 'clients', api,
-    summary: (r) => [`${r.added} new client${r.added === 1 ? '' : 's'}`, `${r.updated} updated`, r.unchanged ? `${r.unchanged} already there` : ''].filter(Boolean).join(', '),
-  });
+  const tab = new URLSearchParams(location.hash.split('?')[1] || '').get('what') || 'clients';
+  const TABS = [['clients', 'Directory'], ['progress-notes', 'Progress notes'], ['activity-notes', 'Activity notes']];
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const notes = (r) => [plural(r.added, 'new note', 'new notes'), r.unchanged ? `${r.unchanged} already there` : ''].filter(Boolean).join(', ');
+  const SETUP = {
+    clients: { hint: /director|client|member|people|contact|participant/i, intro: 'Clients already here are matched, not added twice.', summary: (r) => [plural(r.added, 'new client', 'new clients'), `${r.updated} updated`, r.unchanged ? `${r.unchanged} already there` : ''].filter(Boolean).join(', ') },
+    'progress-notes': { hint: /progress/i, intro: 'Each note goes to its client in the directory, with its date and who wrote it. A note already here is not added twice.', summary: notes },
+    'activity-notes': { hint: /activit/i, intro: 'Each activity goes to its client in the directory as an Activity case note, with its date and who wrote it. A note already here is not added twice.', summary: notes },
+  }[tab] || null;
+  if (!SETUP) { location.hash = '#/import'; return; }
+  $('#view').innerHTML = `<h2>Import</h2>
+    <nav class="tabs" aria-label="What to import">${TABS.map(([id, label]) => `<a href="#/import?what=${id}" class="${id === tab ? 'on' : ''}" ${id === tab ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav>
+    <details class="card how"><summary>Moving from Regroup</summary>
+      <ol><li>In Regroup, export the directory, the progress notes and the activity notes, each as a spreadsheet (CSV or Excel) or JSON file.</li>
+      <li>Import the directory first. Keep its ID column matched, so each note finds its client.</li>
+      <li>Then import the progress notes and the activity notes. Check the rows before you import; nothing is saved until you press Import.</li></ol></details>
+    <p class="muted">${SETUP.intro}</p>
+    <div class="card"><div id="import-box"></div></div>`;
+  mountImporter($('#import-box'), { kind: tab, api, summary: SETUP.summary, sheetHint: SETUP.hint, extra: tab === 'clients' ? {} : { source: 'Regroup' } });
 }
 
 async function showActivity() {
@@ -443,7 +455,7 @@ async function showActivity() {
   const LABEL = {
     'client.add': 'Added client', 'client.update': 'Changed client', 'client.archive': 'Archived client', 'client.unarchive': 'Restored client',
     'note.add': 'Wrote a case note for', 'note.strike': 'Struck a case note', 'post.add': 'Posted', 'post.reply': 'Replied to a post',
-    'post.pin': 'Pinned a post', 'post.unpin': 'Unpinned a post', 'post.remove': 'Removed a post', 'import.clients': 'Imported clients', 'export.clients': 'Exported the directory', 'directory.lookup': 'Looked up the directory for intake',
+    'post.pin': 'Pinned a post', 'post.unpin': 'Unpinned a post', 'post.remove': 'Removed a post', 'import.clients': 'Imported clients', 'import.notes': 'Imported', 'export.clients': 'Exported the directory', 'directory.lookup': 'Looked up the directory for intake',
   };
   $('#view').innerHTML = `<h2>Activity</h2>
     <table class="list"><thead><tr><th class="keep">When</th><th class="keep">Who</th><th class="keep">What</th></tr></thead><tbody>
