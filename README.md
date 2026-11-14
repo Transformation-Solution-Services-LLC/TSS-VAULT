@@ -86,7 +86,7 @@ Production needs `DATABASE_URL` (Postgres), `COCKPIT_URL`, `SESSION_SECRET`
 and `VAULT_SERVICE_TOKEN`. In the TSS suite it is deployed from
 TSS-FullStack's `render.yaml` as `tss-vault`.
 
-Copyright Transformation Solution Services, LLC.
+Copyright Transformation Solutions Services, LLC.
 
 ## Error tracking and organization export
 
